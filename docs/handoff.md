@@ -4,6 +4,14 @@ Cập nhật: 2026-10-20, sau **sửa đủ R01–R07 của T09/T10/T12 và T11 
 
 **Kết quả mới nhất:** Driver V4 + lifecycle confirm/release/finish, release-before-reserve tombstone, command claim nguyên tử, resource/operation hash, version bounds và expiry RESERVED. Trip V3 scope replay theo principal/operation/key, phân quyền qua driver_user_id, phân trang long. Candidates/event contract mang driverUserId tách biệt driverId. Test nâng cấp giữ replay cũ, contention qua deadline, fencing và restart ứng dụng đều pass. Chưa có publisher/matching/saga; không triển khai T13+ trong lượt này.
 
+## ⚠️ Blocker trước T13 (C03)
+
+Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cần sửa**: [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md). **T13 (và mọi task mới) chỉ bắt đầu sau khi xong:**
+- **F01 + N10** (P1): bỏ qua xác thực bằng biến thể URL — phải sửa SecurityFilterChain ở cả 5 service trước.
+- **Mục contract T05**: N15 (`mandatory` + returns cho publisher), N21 (hành vi NoDriverFound/hết candidate), N22 (thời điểm ghi `trips.driver_id`), N23 (`x-dlq-reason` republish), N24 (release mọi reservationId bị bỏ), F31 (event hủy matching không tồn tại).
+
+Trạng thái sửa theo dõi bằng checkbox `[ ]/[x]` trong chính file FIX_LIST; tiến độ từng pha ghi ở `docs/progress.md`.
+
 **Các chốt mới thay thế chi tiết lịch sử T09/T10/T12 phía dưới:**
 - Claim processed_commands trước nghiệp vụ, cùng transaction; duplicate đợi commit rồi replay/conflict. Khóa transaction theo reservationId bao phủ cả row chưa có. Driver CAS/fencing vẫn bắt buộc.
 - Scoped hash = SHA256(operation + '|' + reservationId + '|' + bodyHash); migration V4 chuyển hash RESERVE cũ. commandVersion 1..2147483647; worker expiry không tự tăng external version.
@@ -36,7 +44,7 @@ Cập nhật: 2026-10-20, sau **sửa đủ R01–R07 của T09/T10/T12 và T11 
 ### A. T13 — Outbox publisher Trip (owner A, tiếp nối T12)
 - Phạm vi (spec §20.4): **Trip outbox schema/worker, publisher confirms, retry publish với eventId ổn định; phát TripRequested**.
 - Trạng thái hiện có: bảng `outbox` + row PENDING đã tạo ở T12 — T13 chỉ cần worker scan pending → build envelope chuẩn (eventId = outbox.id, producer `trip-service`, correlationId giữ nguyên, schemaVersion 1) → publish persistent + confirms qua RabbitMQ (`ride.events` rk `trip.requested`) → đánh dấu SENT; retry transient theo events.md §4.3.
-- Dependency: T04 (DONE), T12 (DONE) → **sẵn sàng, không blocker**.
+- Dependency: T04 (DONE), T12 (DONE); **blocker**: F01+N10 + N15/N21–N24/F31 trong [FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md) phải xong trước.
 - Nguồn sự thật: `events.md` §2/§3.1/§4.6 + topology T04 (`infra/rabbitmq/declare-topology.sh`); management API RabbitMQ ghi ở handoff trước.
 ### B. T14 — Consumer inbox và retry (owner B)
 - Dependency T04/T05/T07 đã DONE; T14 vẫn TODO, chưa có consumer nghiệp vụ được thêm trong lượt này.

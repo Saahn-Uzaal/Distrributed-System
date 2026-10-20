@@ -18,10 +18,10 @@ Trạng thái: `TODO` | `IN_PROGRESS` | `BLOCKED` | `DONE`
 | T10 — Giữ chỗ nguyên tử (atomic reserve) | B | DONE | T09 | docs/tasks/T10.md (41 tests driver-service pass: 13 reserve integration + 14 profile + 11 probe + 3 log; full repo 86/0; live probe :8081/:8082 + replay/conflict/tombstone) | – |
 | T11 — Confirm/release/finish | B | DONE | T10 | docs/tasks/T11.md (17 lifecycle HTTP tests + restart recovery; Driver 67/0, full repo 130/0; tombstone/version/fencing/expiry và nâng cấp giữ replay) | – |
 | T12 — Quote và tạo trip | A | DONE | T03, T05, T07 | docs/tasks/T12.md (25 tests trip-service pass: 11 integration Testcontainers PG + 14 probe/log; full repo 97/0; live probe nginx :8080 quote/create/replay/mismatch/list/get + outbox pending verify) | – |
-| T13 — Outbox publisher Trip | A | TODO | T04, T12 | – | – |
-| T14 — Consumer inbox và retry | B | TODO | T04, T05, T07 | – | – |
+| T13 — Outbox publisher Trip | A | TODO | T04, T12 | – | F01+N10; N15, N21, N22, N23, N24, F31 (FIX_LIST_T01-T12) |
+| T14 — Consumer inbox và retry | B | TODO | T04, T05, T07 | – | F01+N10; N15, N23 (FIX_LIST_T01-T12) |
 | T15 — Matching job thật | B | TODO | T09, T13, T14 | – | – |
-| T16 — Trip nhận proposal và reserve | A | TODO | T11, T12, T13, T14, T15 | – | – |
+| T16 — Trip nhận proposal và reserve | A | TODO | T11, T12, T13, T14, T15 | – | F01+N10; N21, N22, N24, F31 (FIX_LIST_T01-T12) |
 | T17 — Driver đọc offer | B | TODO | T11, T16 | – | – |
 | T18 — Accept chuyến | A | TODO | T16, T17 | – | – |
 | T19 — Reject và tìm lại | A | TODO | T18 | – | – |

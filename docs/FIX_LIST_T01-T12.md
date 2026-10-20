@@ -48,19 +48,19 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
 
 ## Chung / quy trình (T01–T02)
 
-- [ ] **C01 — N35 (P1): Workspace không phải git repository**
+- [x] **C01 — N35 (P1): Workspace không phải git repository**
   - Vị trí: root (không có `.git`).
   - Vấn đề: T01–T12 đã DONE nhưng chưa có commit nào. Đề §10.1 bắt buộc lịch sử commit của từng thành viên; đề §12 ghi "không chứng minh được đóng góp" là không đạt.
   - Sửa: `git init` (hoặc clone repo GitHub có sẵn rồi chép mã vào); kiểm tra `.gitignore` đã chặn `.env`, `keys/`, `*.pem`, `src/web/dist`, `target/` **trước** lần `git add` đầu tiên. Từ đây mỗi thành viên commit phần mình sửa bằng tài khoản của chính họ. Không dựng lại lịch sử giả (spec §1).
   - Kiểm chứng: `git status` không liệt kê `.env` hay `keys/*.pem`; `git log` có commit thật.
 
-- [ ] **C02 — N36 (P2): Thiếu `src/` và `tests/` mà đề bắt buộc; README ghi sai**
+- [x] **C02 — N36 (P2): Thiếu `src/` và `tests/` mà đề bắt buộc; README ghi sai**
   - Vị trí: root; `README.md` mục "Cấu trúc repository"; root `pom.xml` `<modules>`.
   - Vấn đề: 5 service và `web/` nằm ở root. Đề §10.1 bắt buộc có `src/` và `tests/`. Spec §16 đặt `deploy/nginx.conf` và `deploy/postgres/init/` (hiện ở `deploy/nginx/` và `infra/postgres/init/`). README lại ghi "`src/` chứa 5 backend modules".
   - Sửa: chuyển sang `src/<service>/` và `src/web/`; cập nhật `<module>src/identity-service</module>`…, đường dẫn bind mount trong `deploy/compose.yaml`, script `infra/rabbitmq/*`, README và docs. Tạo `tests/` (ít nhất `tests/README.md` mô tả test nằm trong từng module và test hệ thống sẽ đặt ở đây). Làm trong một commit riêng trước khi sửa lỗi khác.
   - Kiểm chứng: `./mvnw -B clean verify` vẫn 130/0; `npm run build` trong `src/web`; `docker compose config --quiet`; Nginx vẫn phục vụ được build.
 
-- [ ] **C03 — N37 (P2): Handoff/backlog không nhắc tới các bản rà soát; ghi "không có blocker"**
+- [x] **C03 — N37 (P2): Handoff/backlog không nhắc tới các bản rà soát; ghi "không có blocker"**
   - Vị trí: `docs/handoff.md` mục "Task kế tiếp"; `docs/backlog.md`; `docs/progress.md`.
   - Sửa: thêm mục "Blocker trước T13" trỏ tới file này. Ghi rõ T13 chỉ bắt đầu sau khi xong F01/N10 và các mục contract T05 (N15, N21–N24, F31). Cột Blocker của T13/T14/T16 ghi các ID tương ứng.
   - Kiểm chứng: một người đọc handoff sẽ thấy ngay danh sách blocker.

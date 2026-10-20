@@ -82,7 +82,7 @@ Các JWT thử ở trên được ký bằng khóa dev hợp lệ, với subject
 
 **Task liên quan:** T06; cần giải quyết trước khi nhân rộng verification sang T07.
 
-**Tệp chính:** [JwtService.java](../identity-service/src/main/java/com/ridehailing/identity/service/JwtService.java), [JwtAuthFilter.java](../identity-service/src/main/java/com/ridehailing/identity/security/JwtAuthFilter.java).
+**Tệp chính:** [JwtService.java](../src/identity-service/src/main/java/com/ridehailing/identity/service/JwtService.java), [JwtAuthFilter.java](../src/identity-service/src/main/java/com/ridehailing/identity/security/JwtAuthFilter.java).
 
 **Nguyên nhân:** `JWSObject.verify(verifier)` kiểm tra chữ ký JWS; code hiện tại không kiểm tra `exp` hoặc `nbf`. Comment nói phương thức này đã kiểm tra thời hạn là sai. Ép kiểu `aud` trực tiếp cũng cần được rà soát để claims sai kiểu không thoát thành lỗi 500.
 
@@ -127,7 +127,7 @@ Các JWT thử ở trên được ký bằng khóa dev hợp lệ, với subject
 
 **Task liên quan:** T06.
 
-**Tệp chính:** [UserService.java](../identity-service/src/main/java/com/ridehailing/identity/service/UserService.java), [GlobalExceptionHandler.java](../identity-service/src/main/java/com/ridehailing/identity/exception/GlobalExceptionHandler.java), [UserRepository.java](../identity-service/src/main/java/com/ridehailing/identity/domain/UserRepository.java).
+**Tệp chính:** [UserService.java](../src/identity-service/src/main/java/com/ridehailing/identity/service/UserService.java), [GlobalExceptionHandler.java](../src/identity-service/src/main/java/com/ridehailing/identity/exception/GlobalExceptionHandler.java), [UserRepository.java](../src/identity-service/src/main/java/com/ridehailing/identity/domain/UserRepository.java).
 
 **Nguyên nhân:** `existsByEmail` rồi `save` là hai bước. Nhiều request có thể cùng thấy email chưa tồn tại; unique constraint chặn dữ liệu trùng nhưng exception hiện bị chuyển thành 500.
 
@@ -149,7 +149,7 @@ Các JWT thử ở trên được ký bằng khóa dev hợp lệ, với subject
 
 **Task liên quan:** T06/T05.
 
-**Tệp chính:** [RegisterRequest.java](../identity-service/src/main/java/com/ridehailing/identity/web/dto/RegisterRequest.java), [LoginRequest.java](../identity-service/src/main/java/com/ridehailing/identity/web/dto/LoginRequest.java), [UserService.java](../identity-service/src/main/java/com/ridehailing/identity/service/UserService.java), [api-contracts.md](api-contracts.md).
+**Tệp chính:** [RegisterRequest.java](../src/identity-service/src/main/java/com/ridehailing/identity/web/dto/RegisterRequest.java), [LoginRequest.java](../src/identity-service/src/main/java/com/ridehailing/identity/web/dto/LoginRequest.java), [UserService.java](../src/identity-service/src/main/java/com/ridehailing/identity/service/UserService.java), [api-contracts.md](api-contracts.md).
 
 **Nguyên nhân:** role không có ràng buộc bắt buộc; DTO cho password tới 100 ký tự nhưng BCrypt hiện tại từ chối trên 72 byte; tên được kiểm tra độ dài trước khi trim.
 
@@ -174,7 +174,7 @@ Các JWT thử ở trên được ký bằng khóa dev hợp lệ, với subject
 
 **Task liên quan:** T06.
 
-**Tệp chính:** [AuthFlowIntegrationTest.java](../identity-service/src/test/java/com/ridehailing/identity/AuthFlowIntegrationTest.java).
+**Tệp chính:** [AuthFlowIntegrationTest.java](../src/identity-service/src/test/java/com/ridehailing/identity/AuthFlowIntegrationTest.java).
 
 **Nguyên nhân:** test đổi ký tự cuối signature từ `A` sang `B` khi token kết thúc bằng `A`. Một số bit cuối của base64url chỉ là padding bits, nên cách viết thay đổi nhưng byte chữ ký không đổi. Đây không phải lỗi RSA verification chấp nhận chữ ký khác.
 

@@ -51,7 +51,7 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
 - [ ] **C01 — N35 (P1): Workspace không phải git repository**
   - Vị trí: root (không có `.git`).
   - Vấn đề: T01–T12 đã DONE nhưng chưa có commit nào. Đề §10.1 bắt buộc lịch sử commit của từng thành viên; đề §12 ghi "không chứng minh được đóng góp" là không đạt.
-  - Sửa: `git init` (hoặc clone repo GitHub có sẵn rồi chép mã vào); kiểm tra `.gitignore` đã chặn `.env`, `keys/`, `*.pem`, `web/dist`, `target/` **trước** lần `git add` đầu tiên. Từ đây mỗi thành viên commit phần mình sửa bằng tài khoản của chính họ. Không dựng lại lịch sử giả (spec §1).
+  - Sửa: `git init` (hoặc clone repo GitHub có sẵn rồi chép mã vào); kiểm tra `.gitignore` đã chặn `.env`, `keys/`, `*.pem`, `src/web/dist`, `target/` **trước** lần `git add` đầu tiên. Từ đây mỗi thành viên commit phần mình sửa bằng tài khoản của chính họ. Không dựng lại lịch sử giả (spec §1).
   - Kiểm chứng: `git status` không liệt kê `.env` hay `keys/*.pem`; `git log` có commit thật.
 
 - [ ] **C02 — N36 (P2): Thiếu `src/` và `tests/` mà đề bắt buộc; README ghi sai**
@@ -72,7 +72,7 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
   - Kiểm chứng: README khớp các POM; có OpenAPI cho Identity/Driver/Trip.
 
 - [ ] **C05 — N19 (P3): Line ending lẫn lộn, Node chưa pin**
-  - Vị trí: root (thiếu `.gitattributes`); `web/package.json` (thiếu `engines`); không có `.nvmrc`.
+  - Vị trí: root (thiếu `.gitattributes`); `src/web/package.json` (thiếu `engines`); không có `.nvmrc`.
   - Vấn đề: `pom.xml`, `nginx.conf`, `generate-dev-keys.sh` dùng CRLF, các file khác dùng LF. Đây là nguyên nhân gốc của F25. Spec §4 yêu cầu pin Node.
   - Sửa: thêm `.gitattributes` (`* text=auto eol=lf`, `*.cmd text eol=crlf`) rồi normalize; thêm `"engines": {"node": "24.x"}` và `.nvmrc` theo phiên bản đã dùng (đang là 24.18.0).
   - Kiểm chứng: `file scripts/*.sh infra/**/*.sh` không còn CRLF; `npm ci` báo lỗi khi sai phiên bản Node.
@@ -342,38 +342,38 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Kiểm chứng: `docker compose up nginx` trên Linux (WSL Docker Engine hoặc VM) → container chạy.
 
 - [ ] **T08-10 — N16 (P2): `crypto.randomUUID()` chỉ có trong secure context**
-  - Vị trí: `web/src/api/client.ts:30`.
+  - Vị trí: `src/web/src/api/client.ts:30`.
   - Vấn đề: mở `http://<IP>:8080` từ máy khác → mọi API call ném TypeError → không đăng nhập được.
   - Sửa: hàm `newUuid()` dùng `crypto.randomUUID` nếu có, nếu không thì dựng UUID v4 từ `crypto.getRandomValues` (có cả ở HTTP thường).
   - Kiểm chứng: unit test giả lập không có `randomUUID`; mở bằng IP LAN và đăng nhập được.
 
 - [ ] **T08-11 — F15 (P2): 401 muộn của token cũ xóa phiên mới**
-  - Vị trí: `web/src/api/client.ts:57–58`.
+  - Vị trí: `src/web/src/api/client.ts:57–58`.
   - Sửa: chỉ `clearSession()` nếu token đang lưu vẫn là token đã gửi đi (so sánh token hoặc số thế hệ phiên).
   - Kiểm chứng: test với fetch hoãn: gửi bằng A, lưu B, A trả 401 → B vẫn còn.
 
 - [ ] **T08-12 — F16 (P2): Login/register cũ hoàn tất muộn ghi đè phiên mới**
-  - Vị trí: `web/src/pages/LoginPage.tsx:17–19`; `RegisterPage.tsx:23–27`.
+  - Vị trí: `src/web/src/pages/LoginPage.tsx:17–19`; `RegisterPage.tsx:23–27`.
   - Sửa: tăng một bộ đếm "auth generation" mỗi lần login/logout; continuation chỉ được `saveSession` và `navigate` khi generation khớp và component còn mounted (AbortController khi unmount).
   - Kiểm chứng: test hai lần login chồng nhau → phiên lưu lại là của lần bắt đầu sau.
 
 - [ ] **T08-13 — F17 (P3): Validation frontend và backend lệch nhau**
-  - Vị trí: `web/src/auth/validation.ts:24,35–36`; `RegisterPage.tsx:39,65`; `LoginPage.tsx:31`.
+  - Vị trí: `src/web/src/auth/validation.ts:24,35–36`; `RegisterPage.tsx:39,65`; `LoginPage.tsx:31`.
   - Vấn đề: JS `trim()` bỏ NBSP còn Java `trim()` thì không (và ngược lại với U+001F); mật khẩu toàn dấu cách qua được frontend; email >254 ký tự qua được AntD.
   - Sửa: chốt định nghĩa trim chung (chỉ ký tự ≤ U+0020 như Java `trim()`, hoặc dùng `strip()` ở backend và `/^\s+|\s+$/` tương đương ở frontend), áp dụng cả hai bên; frontend chặn mật khẩu toàn khoảng trắng và email >254.
   - Kiểm chứng: thêm các ca ở review 20/10 vào `validation.test.ts` và vào test Identity.
 
 - [ ] **T08-14 — F18 + F19 (P3): Xử lý lỗi sau đăng ký và khi `/me` lỗi**
-  - Vị trí: `RegisterPage.tsx:23–29`; `web/src/hooks/useMe.ts:16`; `PassengerHome.tsx:16`; `DriverHome.tsx:16`.
+  - Vị trí: `RegisterPage.tsx:23–29`; `src/web/src/hooks/useMe.ts:16`; `PassengerHome.tsx:16`; `DriverHome.tsx:16`.
   - Sửa: register 201 nhưng login lỗi → báo "Đăng ký thành công, vui lòng đăng nhập" rồi chuyển sang `/login`. `useMe` trả về `error` riêng: chỉ 401 mới chuyển về trang login; lỗi mạng hoặc 5xx hiện nút "Thử lại".
   - Kiểm chứng: test hook với 401, 500 và lỗi mạng.
 
 - [ ] **T08-15 — N34 (P3): Bỏ qua `expiresIn`, không redirect khi đã đăng nhập, `fetch` không có timeout**
-  - Vị trí: `web/src/api/client.ts`, `auth/session.ts`, `pages/LoginPage.tsx`, `App.tsx`.
+  - Vị trí: `src/web/src/api/client.ts`, `auth/session.ts`, `pages/LoginPage.tsx`, `App.tsx`.
   - Sửa: lưu `expiresAt` trong session, `loadSession()` trả null khi đã hết hạn; `/login` và `/register` chuyển người đã đăng nhập về trang của role; `fetch` có AbortController timeout (ví dụ 5 s) và báo lỗi rõ ràng. Sửa luôn comment "server echo lại" ở dòng 29 cho đúng sau T07-10.
 
 - [ ] **T08-16 — F30 (P2): `npm audit` có 8 package lỗi (2 critical, 1 high)**
-  - Vị trí: `web/package.json:15,22,23`; `web/package-lock.json`.
+  - Vị trí: `src/web/package.json:15,22,23`; `src/web/package-lock.json`.
   - Sửa: nâng `vite`, `vitest` (kéo theo `tinypool`, `@vitest/mocker`, `vite-node`, `esbuild`) và `react-router-dom` lên bản đã vá. Đọc ghi chú breaking change của Vite và Vitest; chạy lại test và build.
   - Kiểm chứng: `npm audit` không còn critical/high; `npm test` 13/13; `npm run build` thành công.
 

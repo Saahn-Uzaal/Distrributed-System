@@ -20,12 +20,13 @@
   <name>ride-hailing-system</name>
   <description>DS03 - Ride-Hailing Microservices System (Grab/Uber simulation) for Distributed Systems course</description>
 
+  <!-- C02: modules nằm trong src/ theo đề §10.1 -->
   <modules>
-    <module>identity-service</module>
-    <module>driver-service</module>
-    <module>trip-service</module>
-    <module>matching-service</module>
-    <module>payment-service</module>
+    <module>src/identity-service</module>
+    <module>src/driver-service</module>
+    <module>src/trip-service</module>
+    <module>src/matching-service</module>
+    <module>src/payment-service</module>
   </modules>
 
   <properties>

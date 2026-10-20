@@ -11,7 +11,7 @@ Nguồn: [T07-T08_REVIEW.md](T07-T08_REVIEW.md). Phạm vi: sửa đúng 7 phát
 | R03 | Frontend báo "Đăng nhập thành công" dù server từ chối phiên (401) | `client.ts` xóa sessionStorage khi request đã xác nhận nhận 401; PassengerHome/DriverHome chỉ hiện thông báo khi `/me` trả user thật; redirect `/login` khi `!loading && !user`; bỏ fallback hiển thị session cũ | Source + build pass; hành vi theo contract §5 (correlation/session) — chưa E2E browser (giới hạn ghi rõ) |
 | R04 | Test security 4 service vẫn kết nối PostgreSQL dev (exclusion Boot 3 bị Boot 4 lặng lẽ bỏ qua) | Đổi exclusion sang `org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration` (tên thật của Boot 4) trong 4 test file + property `app.flyway.enabled=false`; cả 5 `FlywayConfig` thêm `@ConditionalOnProperty(name="app.flyway.enabled", havingValue="true", matchIfMissing=true)` — hành vi production không đổi | Chạy security tests với **Postgres DỪNG** → driver/matching/payment/trip pass; sau đó full `clean verify` (postgres healthy) BUILD SUCCESS, 6 module xanh |
 | R05 | Log runtime là text mặc định, thiếu structured JSON + field spec §11 | `JsonLogLayout` riêng mỗi service (không thêm dependency Maven — tránh DNS flaky) + `logback-spring.xml`; `CorrelationIdFilter` ×5 set MDC `eventType=http_request`, `result`, `durationMs` (+ đo thời gian). Field: timestamp UTC ISO, level, service, instanceId (env `INSTANCE_ID` hoặc UUID per JVM), correlationId/eventType/result/durationMs/tripId/reservationId từ MDC, logger, message, exception | +`JsonLogLayoutTest` ×5 (JSON hợp lệ, đủ field bắt buộc, không field secret top-level, escaping) — pass trong `clean verify`; **log live** khi probe :8083 (dưới) |
-| R06 | Validation frontend lệch contract: password theo ký tự thay vì byte UTF-8; fullName trên chuỗi thô thay vì sau trim | Mới `web/src/auth/validation.ts`: `utf8ByteLength` (pure function, không TextEncoder), password ≤ **72 byte** UTF-8, fullName 2–100 **sau trim**; RegisterPage dùng validator antd custom + nhãn cập nhật; +`validation.test.ts` (ASCII/tiếng Việt/ranh giới trim) | `npm test`: **13 tests pass** (2 routeForRole cũ + 11 validation mới). Lưu ý: review ghi "25 ký tự ạ = 75 byte" — đúng, vì `ạ` (U+1AB1) = **3 byte**; test chốt theo giá trị thật (24×ạ=72B hợp lệ, 25×ạ=75B từ chối; trộn 48 ASCII + 8×ạ = 72B) |
+| R06 | Validation frontend lệch contract: password theo ký tự thay vì byte UTF-8; fullName trên chuỗi thô thay vì sau trim | Mới `src/web/src/auth/validation.ts`: `utf8ByteLength` (pure function, không TextEncoder), password ≤ **72 byte** UTF-8, fullName 2–100 **sau trim**; RegisterPage dùng validator antd custom + nhãn cập nhật; +`validation.test.ts` (ASCII/tiếng Việt/ranh giới trim) | `npm test`: **13 tests pass** (2 routeForRole cũ + 11 validation mới). Lưu ý: review ghi "25 ký tự ạ = 75 byte" — đúng, vì `ạ` (U+1AB1) = **3 byte**; test chốt theo giá trị thật (24×ạ=72B hợp lệ, 25×ạ=75B từ chối; trộn 48 ASCII + 8×ạ = 72B) |
 | R07 | `client_max_body_size 1m` lệch contract 64 KiB | nginx: `client_max_body_size 64k` + `error_page 413 /errors/payload-too-large.json`; static JSON error page `web/public/errors/payload-too-large.json` (Vite copy vào `dist/`) | Probe live POST `/api/auth/login` body **70.067 byte** → **413 + application/json** từ nginx |
 
 ## Chi tiết từng fix
@@ -32,11 +32,11 @@ Nguồn: [T07-T08_REVIEW.md](T07-T08_REVIEW.md). Phạm vi: sửa đúng 7 phát
 
 ### R02 — Bảo vệ chính path `/api/notifications`
 - `trip-service/.../security/ApiSecurityFilter.java`: điều kiện bảo vệ notifications thêm `uri.equals("/api/notifications")`.
-- `trip-service/src/test/java/com/ridehailing/trip/SecurityProbeTest.java`: +3 test probe URL chính xác (GET `/api/notifications` không token → 401; POST `/api/trips` không token → 401; driver token hợp lệ trên path gốc → 404 vì controller chưa có — đúng phạm vi T25).
+- `src/trip-service/src/test/java/com/ridehailing/trip/SecurityProbeTest.java`: +3 test probe URL chính xác (GET `/api/notifications` không token → 401; POST `/api/trips` không token → 401; driver token hợp lệ trên path gốc → 404 vì controller chưa có — đúng phạm vi T25).
 - Kết quả: trip-service **14 tests, 0 failures** trong `clean verify`.
 
 ### R03 — Phiên frontend khi server từ chối
-- `web/src/api/client.ts`: request đã xác nhận (Bearer) nhận 401 → xóa sessionStorage.
+- `src/web/src/api/client.ts`: request đã xác nhận (Bearer) nhận 401 → xóa sessionStorage.
 - `PassengerHome.tsx` / `DriverHome.tsx`: chỉ hiển thị "Đăng nhập thành công" khi `/me` trả user thật; `!loading && !user` → redirect `/login`; bỏ hiển thị fallback từ session cache cũ.
 - Giới hạn: chưa E2E browser trong phiên này (review cũng ghi giới hạn tương tự); hành vi được kiểm chứng qua source + build + test component hiện có.
 
@@ -56,7 +56,7 @@ Nguồn: [T07-T08_REVIEW.md](T07-T08_REVIEW.md). Phạm vi: sửa đúng 7 phát
   ```
 
 ### R06 — Validation frontend khớp contract §3.1 (F04)
-- `web/src/auth/validation.ts`: `utf8ByteLength` pure function; `validatePassword` = ≥8 ký tự và ≤ **72 byte UTF-8**; `validateFullName` = 2–100 ký tự **sau trim**.
+- `src/web/src/auth/validation.ts`: `utf8ByteLength` pure function; `validatePassword` = ≥8 ký tự và ≤ **72 byte UTF-8**; `validateFullName` = 2–100 ký tự **sau trim**.
 - `RegisterPage.tsx`: validator antd custom + nhãn "Mật khẩu tối đa 72 byte UTF-8".
 - `validation.test.ts`: ASCII (72 hợp lệ/73 từ chối), tiếng Việt (24×ạ=72B hợp lệ, 25×ạ=75B từ chối — 25 ký tự vẫn < 72 ký tự nên test bắt được kiểm tra naive theo độ dài chuỗi), trộn ranh giới byte, fullName trim (98+2 khoảng trắng hợp lệ; raw 102→trim 100 hợp lệ; " a" từ chối).
 - `npm test`: **13/13 pass**.

@@ -8,14 +8,14 @@ Nguồn việc: người dùng yêu cầu sửa ngay các điểm còn sót sau 
 
 ### F01 — JWT
 
-- `identity-service/src/main/java/com/ridehailing/identity/service/JwtService.java`: kiểm tra payload chuyển thành JSON object thành công và khác null; payload không hợp lệ được chuyển thành `UnauthorizedException`, filter trả `401 UNAUTHORIZED` thay vì 500.
+- `src/identity-service/src/main/java/com/ridehailing/identity/service/JwtService.java`: kiểm tra payload chuyển thành JSON object thành công và khác null; payload không hợp lệ được chuyển thành `UnauthorizedException`, filter trả `401 UNAUTHORIZED` thay vì 500.
 - Audience phải là mảng chứa toàn string. Phần tử là số hoặc null bị từ chối, không bị lọc bỏ để chấp nhận phần còn lại.
 - Đổi điều kiện hết hạn thành `exp <= now`, đúng với clock skew 0 giây. Token không còn hợp lệ ngay tại giây hết hạn.
 - Cập nhật chính sách tương ứng ở `docs/api-contracts.md` mục 2.
 
 ### F04 — fullName sau trim
 
-- `identity-service/src/main/java/com/ridehailing/identity/web/dto/RegisterRequest.java`: giữ `@NotBlank` cho fullName, bỏ kiểm tra độ dài trên chuỗi thô. `UserService` tiếp tục trim rồi kiểm tra 2–100 ký tự trước khi lưu.
+- `src/identity-service/src/main/java/com/ridehailing/identity/web/dto/RegisterRequest.java`: giữ `@NotBlank` cho fullName, bỏ kiểm tra độ dài trên chuỗi thô. `UserService` tiếp tục trim rồi kiểm tra 2–100 ký tự trước khi lưu.
 - Tên đúng 100 ký tự sau trim được chấp nhận và lưu đúng giá trị đã trim, kể cả khi chuỗi đầu vào có thêm khoảng trắng ở hai đầu. Tên 101 ký tự sau trim vẫn trả 400.
 
 ### F07 — Java trong terminal
@@ -26,7 +26,7 @@ Nguồn việc: người dùng yêu cầu sửa ngay các điểm còn sót sau 
 
 ## Regression tests và kiểm tra đã chạy
 
-Thêm 4 test HTTP/PostgreSQL thật trong `identity-service/src/test/java/com/ridehailing/identity/AuthFlowIntegrationTest.java`:
+Thêm 4 test HTTP/PostgreSQL thật trong `src/identity-service/src/test/java/com/ridehailing/identity/AuthFlowIntegrationTest.java`:
 
 | Test | Hành vi được kiểm tra |
 |---|---|

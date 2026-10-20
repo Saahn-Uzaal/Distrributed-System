@@ -67,8 +67,8 @@ services:
       - "8080:8080"
     volumes:
       - ../deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # Build frontend trước khi up nginx (npm run build ở web/)
-      - ../web/dist:/usr/share/nginx/html:ro
+      # Build frontend trước khi up nginx (npm run build ở src/web/) — C02
+      - ../src/web/dist:/usr/share/nginx/html:ro
     networks: [backend]
 
 volumes:

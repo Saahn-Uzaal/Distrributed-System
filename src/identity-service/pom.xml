@@ -8,11 +8,13 @@
     <groupId>com.ridehailing</groupId>
     <artifactId>ride-hailing-system</artifactId>
     <version>0.1.0</version>
+    <!-- C02: module nằm trong src/ -->
+    <relativePath>../../pom.xml</relativePath>
   </parent>
 
-  <artifactId>trip-service</artifactId>
-  <name>trip-service</name>
-  <description>Trips, fare, Saga orchestration, notifications (port 8083)</description>
+  <artifactId>identity-service</artifactId>
+  <name>identity-service</name>
+  <description>Users, credentials, login, JWT (port 8081)</description>
 
   <dependencies>
     <dependency>
@@ -23,10 +25,29 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
-    <!-- T03: datasource + Flyway baseline (chưa có JPA) -->
+    <!-- T03: datasource + Flyway baseline; T06: JPA cho users -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <!-- T06: Bean Validation cho DTO register/login -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <!-- T06: JWT RS256 qua Nimbus JOSE JWT (Spring Security 7 đã bỏ Jwt.builder — dùng Nimbus trực tiếp) -->
+    <dependency>
+      <groupId>com.nimbusds</groupId>
+      <artifactId>nimbus-jose-jwt</artifactId>
+      <version>${nimbus-jose-jwt.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-crypto</artifactId>
     </dependency>
     <dependency>
       <groupId>org.postgresql</groupId>
@@ -42,27 +63,13 @@
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-database-postgresql</artifactId>
     </dependency>
-    <!-- T07: verify JWT RS256 (public key) theo contract api-contracts.md §2 -->
-    <dependency>
-      <groupId>com.nimbusds</groupId>
-      <artifactId>nimbus-jose-jwt</artifactId>
-      <version>${nimbus-jose-jwt.version}</version>
-    </dependency>
-    <!-- T07: security probe tests (HTTP thật, không cần DB) -->
+
+    <!-- T06: integration test trên PostgreSQL thật (Testcontainers, cần Docker) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
-    <!-- T12 fix: SecurityProbeTest cần DataSource in-memory vì repository phụ thuộc JdbcTemplate
-         (probe không chạm DB — filter chặn trước dispatch; pattern driver-service T09) -->
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
-      <version>2.3.232</version>
-      <scope>test</scope>
-    </dependency>
-    <!-- T12: integration test quote/create/list/get trên PostgreSQL thật (Testcontainers) -->
     <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>postgresql</artifactId>

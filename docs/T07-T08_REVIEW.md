@@ -49,7 +49,7 @@ Khi follow redirect ở môi trường hiện tại, các request tới Trip nh�
 
 **Mức ưu tiên:** cao đối với phạm vi bảo vệ endpoint; T07.
 
-**Tệp:** [ApiSecurityFilter.java](../trip-service/src/main/java/com/ridehailing/trip/security/ApiSecurityFilter.java).
+**Tệp:** [ApiSecurityFilter.java](../src/trip-service/src/main/java/com/ridehailing/trip/security/ApiSecurityFilter.java).
 
 Filter kiểm tra `uri.startsWith("/api/notifications/")` nhưng không kiểm tra `uri.equals("/api/notifications")`.
 
@@ -69,7 +69,7 @@ Probe trực tiếp Trip, không gửi JWT:
 
 **Mức ưu tiên:** vừa; T08.
 
-**Tệp:** [useMe.ts](../web/src/hooks/useMe.ts), [App.tsx](../web/src/App.tsx), [PassengerHome.tsx](../web/src/pages/PassengerHome.tsx), [DriverHome.tsx](../web/src/pages/DriverHome.tsx).
+**Tệp:** [useMe.ts](../src/web/src/hooks/useMe.ts), [App.tsx](../src/web/src/App.tsx), [PassengerHome.tsx](../src/web/src/pages/PassengerHome.tsx), [DriverHome.tsx](../src/web/src/pages/DriverHome.tsx).
 
 - `useMe` nuốt lỗi `/me`, để `user = null` và kết thúc loading.
 - Guard chỉ kiểm tra session lưu ở client; không xóa session khi nhận 401.
@@ -83,7 +83,7 @@ Test render bổ sung trong bản sao tạm mô phỏng trạng thái `/me` đã
 
 **Mức ưu tiên:** vừa; T07.
 
-**Tệp:** các `SecurityProbeTest`/`SecuritySmokeTest` ở Driver, Trip, Matching, Payment; [FlywayConfig.java](../driver-service/src/main/java/com/ridehailing/driver/config/FlywayConfig.java).
+**Tệp:** các `SecurityProbeTest`/`SecuritySmokeTest` ở Driver, Trip, Matching, Payment; [FlywayConfig.java](../src/driver-service/src/main/java/com/ridehailing/driver/config/FlywayConfig.java).
 
 Nhật ký T07 nói 4 service này exclude JDBC/Flyway để test không cần DB. Nhưng log của lần chạy mới xác nhận:
 
@@ -124,7 +124,7 @@ Log runtime mới vẫn là text mặc định của Spring, ví dụ:
 
 **Mức ưu tiên:** vừa/thấp; T08.
 
-**Tệp:** [RegisterPage.tsx](../web/src/pages/RegisterPage.tsx).
+**Tệp:** [RegisterPage.tsx](../src/web/src/pages/RegisterPage.tsx).
 
 - Form ghi mật khẩu “8–72 ký tự” và chỉ dùng min/max độ dài chuỗi. Backend yêu cầu tối đa **72 byte UTF-8**. Ví dụ 25 ký tự `ạ` là 75 byte: qua điều kiện độ dài client nhưng bị backend từ chối.
 - fullName vẫn kiểm tra max 100 trên chuỗi thô; tên 100 ký tự kèm khoảng trắng hai đầu bị client chặn dù backend/contract chấp nhận sau trim.

@@ -212,10 +212,10 @@
 ### Việc đã làm
 - **R01** — `deploy/nginx/nginx.conf`: 4 location API đổi sang dạng không slash cuối ở cả hai vế (`location /api/trips { proxy_pass http://host.docker.internal:8083/api/trips; }`...) → URL chính xác + subpath được proxy nguyên request, hết 301.
 - **R02** — `trip-service/.../ApiSecurityFilter.java`: bảo vệ thêm `uri.equals("/api/notifications")`; +3 probe test URL chính xác trong `SecurityProbeTest` (trip: 8 → 14 tests).
-- **R03** — `web/src/api/client.ts` xóa sessionStorage khi request đã xác nhận nhận 401; PassengerHome/DriverHome chỉ hiện "Đăng nhập thành công" khi `/me` trả user thật, redirect `/login` khi `!loading && !user`; bỏ fallback session cache cũ.
+- **R03** — `src/web/src/api/client.ts` xóa sessionStorage khi request đã xác nhận nhận 401; PassengerHome/DriverHome chỉ hiện "Đăng nhập thành công" khi `/me` trả user thật, redirect `/login` khi `!loading && !user`; bỏ fallback session cache cũ.
 - **R04** — Nguyên nhân gốc: Boot 4 đổi package autoconfiguration → tên exclusion cũ bị lặng lẽ bỏ qua. Sửa 4 test file security (exclude đúng class Boot 4 + `app.flyway.enabled=false`) và 5 `FlywayConfig` thêm `@ConditionalOnProperty(app.flyway.enabled, matchIfMissing=true)` — production không đổi.
 - **R05** — `JsonLogLayout` + `logback-spring.xml` mỗi service (không dependency mới); `CorrelationIdFilter` ×5 set MDC eventType/result/durationMs; field JSON theo spec §11 (timestamp UTC, instanceId từ env `INSTANCE_ID` hoặc UUID per JVM...); +`JsonLogLayoutTest` ×5.
-- **R06** — Mới `web/src/auth/validation.ts` (password ≤ 72 byte UTF-8 bằng pure function; fullName 2–100 sau trim) + validator antd custom trong RegisterPage + `validation.test.ts`. Sửa giá trị test: `ạ` (U+1AB1) = **3 byte** (handoff trước ghi 2B — sai).
+- **R06** — Mới `src/web/src/auth/validation.ts` (password ≤ 72 byte UTF-8 bằng pure function; fullName 2–100 sau trim) + validator antd custom trong RegisterPage + `validation.test.ts`. Sửa giá trị test: `ạ` (U+1AB1) = **3 byte** (handoff trước ghi 2B — sai).
 - **R07** — nginx `client_max_body_size 64k` + `error_page 413 /errors/payload-too-large.json`; static JSON error page trong `web/public/errors/` (Vite copy vào dist).
 
 ### Lệnh đã chạy và kết quả thật
@@ -243,7 +243,7 @@
 Spec §20.4 (owner B): driver/vehicle migrations; profile, availability, location, heartbeat; internal candidates API lọc heartbeat + khoảng cách. Chưa reserve/matching orchestration (T10+).
 
 ### Việc đã làm
-- **Migrations V2** (`driver-service/src/main/resources/db/migration/V2__drivers.sql`): bảng `vehicles` (plate unique) + `drivers` (user_id unique, status CHECK 4 state theo state machine §4, lat/lng, last_seen_at, current_reservation_id/current_trip_id khai báo sẵn cho T10/T18) + index `(status, last_seen_at)`.
+- **Migrations V2** (`src/driver-service/src/main/resources/db/migration/V2__drivers.sql`): bảng `vehicles` (plate unique) + `drivers` (user_id unique, status CHECK 4 state theo state machine §4, lat/lng, last_seen_at, current_reservation_id/current_trip_id khai báo sẵn cho T10/T18) + index `(status, last_seen_at)`.
 - **Nghiệp vụ** (`DriverService`): createProfile idempotent theo userId (@Transactional; plate trùng → 409 `PLATE_TAKEN`, rollback), setAvailability CAS (chỉ từ OFFLINE/AVAILABLE; RESERVED/BUSY → 409 `STATE_CONFLICT` details `{state, tripId}` với mọi status yêu cầu), updateLocation (mọi state, cập nhật heartbeat), findCandidates (Haversine R=6.371.008.8 m, lọc AVAILABLE + heartbeat mới ≤15s + radius, sort deterministic distanceM tăng → tie-break driverId lexicographic, limit clamp ≤5).
 - **API**: `DriverController` (POST profile, PUT availability, PUT location — userId từ JWT) + `InternalDriverController` (GET `/internal/drivers/candidates?lat&lng&radiusM=5000&limit=5`). DTOs + 4 exception class + handlers trong GlobalExceptionHandler (400/409/404 JSON theo contract §1.2).
 - **Contract**: cập nhật `docs/api-contracts.md` §1.2/§3.2/§4.2 — thêm `PLATE_TAKEN`, rule 404 khi chưa có profile, 409 mọi status khi RESERVED/BUSY, limit/radius rules.
@@ -275,7 +275,7 @@ Spec §20.4 (owner B): Reservation và processed_commands migrations; reserve/ge
 - JAVA_HOME JDK 21 + PATH cấu hình theo README trong shell.
 
 ### Việc đã làm
-- **Migrations V3** (`driver-service/src/main/resources/db/migration/V3__reservations.sql`): `reservations` (id PK do Trip cấp, state CHECK 4 state, terminal_reason, expires_at, last_command_version, pickup/destination/distance_m/fare_vnd — contract decision #4 cho T17 offer) + unique index `(trip_id, attempt)` (invariant 2); `processed_commands` (command_id PK, request_hash, stored_response JSONB).
+- **Migrations V3** (`src/driver-service/src/main/resources/db/migration/V3__reservations.sql`): `reservations` (id PK do Trip cấp, state CHECK 4 state, terminal_reason, expires_at, last_command_version, pickup/destination/distance_m/fare_vnd — contract decision #4 cho T17 offer) + unique index `(trip_id, attempt)` (invariant 2); `processed_commands` (command_id PK, request_hash, stored_response JSONB).
 - **Nghiệp vụ** (`ReservationService`): `reserve()` trong 1 transaction @Transactional — thứ tự: (1) dedup commandId (replay trả stored response / conflict → 409 `COMMAND_CONFLICT`) → (2) tombstone (row terminal → 409 `TOMBSTONED_RESERVATION`) → (3) version check (`commandVersion ≤ last_command_version` → 409 `STALE_VERSION`; `<1` → 400) → (4) CAS driver AVAILABLE + heartbeat cutoff; affected ≠ 1 → rollback toàn bộ. `requestHash()` = SHA-256 payload canonical trừ commandId/commandVersion.
 - **API**: `InternalReservationController` — PUT `/internal/reservations/{reservationId}` (RESERVE, 201/replay) + GET (200/404); security filter T07 enforce `X-Internal-Token`. DTO `ReserveRequest`; 4 exception class mới + handlers trong GlobalExceptionHandler.
 - **Contract**: cập nhật `docs/api-contracts.md` §4.1 — "chốt T10": định nghĩa request_hash, stored_response JSONB `{status,body}`, thứ tự kiểm tra reserve (replay trước tombstone).

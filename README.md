@@ -109,7 +109,7 @@ Migration mới: Driver V4 giữ replay RESERVE cũ và hỗ trợ tombstone thi
 
 ### 5. Khởi động identity-service (ví dụ) và kiểm tra health
 ```bash
-java -jar identity-service/target/identity-service-0.1.0.jar
+java -jar src/identity-service/target/identity-service-0.1.0.jar
 curl http://localhost:8081/actuator/health
 ```
 
@@ -118,7 +118,7 @@ curl http://localhost:8081/actuator/health
 ```bash
 read -r -s -p 'Identity DB password: ' IDENTITY_DB_PASSWORD
 export IDENTITY_DB_PASSWORD
-JWT_PRIVATE_KEY_PATH=keys/jwt-private.pem java -jar identity-service/target/identity-service-0.1.0.jar
+JWT_PRIVATE_KEY_PATH=keys/jwt-private.pem java -jar src/identity-service/target/identity-service-0.1.0.jar
 ```
 
 Từ T07: driver-service và trip-service verify JWT bằng public key — chạy local cần set env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (cả hai); driver-service thêm `INTERNAL_API_TOKEN` cho internal API (`X-Internal-Token`). Dev default trong `application.yml` khớp `.env.example`, nhưng khi chạy jar trực tiếp nên set tường minh.
@@ -129,19 +129,23 @@ Mỗi service chạy trên port riêng (bảng ở trên). Health endpoint: `/ac
 
 ### 6. Frontend và Nginx (T08)
 ```bash
-cd web && npm install && npm run build   # -> web/dist (build TRƯỚC khi up nginx — dist được bind-mount)
+cd src/web && npm install && npm run build   # -> src/web/dist (build TRƯỚC khi up nginx — dist được bind-mount)
 cd ..
 docker compose --env-file .env -f deploy/compose.yaml up -d nginx
 # mở http://localhost:8080 — login/register thật, route theo role
 ```
-- Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|notifications` tới services local trên host (dev mode qua `host.docker.internal`; T29 đổi sang DNS compose khi container hóa services). Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON từ trang lỗi tĩnh `web/public/errors/payload-too-large.json` (phải build frontend trước để file này có trong `dist/`).
+- Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|notifications` tới services local trên host (dev mode qua `host.docker.internal`; T29 đổi sang DNS compose khi container hóa services). Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON từ trang lỗi tĩnh `src/web/public/errors/payload-too-large.json` (phải build frontend trước để file này có trong `dist/`).
 - Services log structured JSON (spec §11); env tùy chọn `INSTANCE_ID` đặt instanceId trong log (mặc định = UUID per JVM).
-- Dev server: `npm run dev` ở `web/` (:5173, có proxy `/api/*` tới :8081/:8082/:8083) — không cần nginx khi phát triển UI.
+- Dev server: `npm run dev` ở `src/web/` (:5173, có proxy `/api/*` tới :8081/:8082/:8083) — không cần nginx khi phát triển UI.
 - Token lưu trong sessionStorage; không log token (source + access log Nginx đều không chứa).
 
 ## Cấu trúc repository
 
-Theo đặc tả mục 16: `src/` chứa 5 backend modules + `web/` (frontend, T08); `deploy/` (compose + nginx), `tests/`, `scripts/`, `docs/` được tạo theo từng task tương ứng trong backlog.
+Theo đề §10.1 và đặc tả mục 16 (C02):
+- `src/` — 5 backend modules (`identity-service`, `driver-service`, `trip-service`, `matching-service`, `payment-service`) + frontend `web/`.
+- `tests/` — test hệ thống cấp project sẽ đặt ở đây; unit/integration test hiện nằm trong từng module (xem `tests/README.md`).
+- `deploy/` — compose + nginx config; `infra/` — init PostgreSQL + declare RabbitMQ topology.
+- `scripts/`, `docs/`; `keys/` và `.env` gitignored.
 
 ## Tài liệu dự án
 

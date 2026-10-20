@@ -33,7 +33,7 @@ Bằng chứng tạm trên máy hiện tại: `%TEMP%/ds03-review-t09-t12/` ch�
 
 **Task:** T12.
 
-**Vị trí:** [TripService.java](../trip-service/src/main/java/com/ridehailing/trip/service/TripService.java), dòng 90–112; [IdempotencyKeyRepository.java](../trip-service/src/main/java/com/ridehailing/trip/repo/IdempotencyKeyRepository.java); bảng `idempotency_keys` trong migration V2.
+**Vị trí:** [TripService.java](../src/trip-service/src/main/java/com/ridehailing/trip/service/TripService.java), dòng 90–112; [IdempotencyKeyRepository.java](../src/trip-service/src/main/java/com/ridehailing/trip/repo/IdempotencyKeyRepository.java); bảng `idempotency_keys` trong migration V2.
 
 Hash chỉ gồm tọa độ. Key là khóa chính toàn cục, không có passenger ID trong khóa, hash hoặc dữ liệu dùng để kiểm tra replay. Nhánh replay trả response đã lưu mà không đối chiếu `user.userId()`.
 
@@ -49,7 +49,7 @@ Hash chỉ gồm tọa độ. Key là khóa chính toàn cục, không có passe
 
 **Task:** ranh giới T09/T12.
 
-**Vị trí:** [TripService.java](../trip-service/src/main/java/com/ridehailing/trip/service/TripService.java), dòng 139–141 và 156–159; [DriverRepository.java](../driver-service/src/main/java/com/ridehailing/driver/repo/DriverRepository.java), dòng 76–80; [V2__drivers.sql](../driver-service/src/main/resources/db/migration/V2__drivers.sql).
+**Vị trí:** [TripService.java](../src/trip-service/src/main/java/com/ridehailing/trip/service/TripService.java), dòng 139–141 và 156–159; [DriverRepository.java](../src/driver-service/src/main/java/com/ridehailing/driver/repo/DriverRepository.java), dòng 76–80; [V2__drivers.sql](../src/driver-service/src/main/resources/db/migration/V2__drivers.sql).
 
 T09 tạo `drivers.id` bằng `gen_random_uuid()` và lưu identity user ID ở `drivers.user_id`. Profile/candidates/reserve đều trả hoặc sử dụng `drivers.id` làm `driverId`. JWT `sub` theo contract là identity user ID. T12 lại truyền `user.userId()` vào điều kiện `driver_id = ?`, và so sánh `row.driverId().equals(user.userId())` khi đọc detail.
 
@@ -67,7 +67,7 @@ T09 tạo `drivers.id` bằng `gen_random_uuid()` và lưu identity user ID ở 
 
 **Task:** T10.
 
-**Vị trí:** [ReservationService.java](../driver-service/src/main/java/com/ridehailing/driver/service/ReservationService.java), bước đọc `findProcessed` đầu method `reserve`, INSERT reservation tại dòng 111–123 và ghi processed command tại dòng 143.
+**Vị trí:** [ReservationService.java](../src/driver-service/src/main/java/com/ridehailing/driver/service/ReservationService.java), bước đọc `findProcessed` đầu method `reserve`, INSERT reservation tại dòng 111–123 và ghi processed command tại dòng 143.
 
 Dedup dùng SELECT trước, ghi `processed_commands` sau cùng. Hai bản sao cùng command đều có thể đọc thấy chưa tồn tại. Bản thứ nhất tạo reservation và commit; bản thứ hai va unique khi INSERT cùng reservation, rồi được map thành `DRIVER_NOT_AVAILABLE`, không đọc lại response command đã commit.
 
@@ -85,7 +85,7 @@ CAS vẫn bảo vệ việc driver chỉ bị chiếm một lần. Lỗi ở k�
 
 **Task:** T09.
 
-**Vị trí:** [DriverService.java](../driver-service/src/main/java/com/ridehailing/driver/service/DriverService.java), dòng 58–71.
+**Vị trí:** [DriverService.java](../src/driver-service/src/main/java/com/ridehailing/driver/service/DriverService.java), dòng 58–71.
 
 Cả hai request có thể qua `findByUserId` khi profile chưa tồn tại, rồi cùng INSERT vehicle với plate giống nhau. Request thua bị map thành plate trùng của người khác, dù đây là retry của cùng user.
 
@@ -101,7 +101,7 @@ Cả hai request có thể qua `findByUserId` khi profile chưa tồn tại, r�
 
 **Task:** T10.
 
-**Vị trí:** [ReservationService.java](../driver-service/src/main/java/com/ridehailing/driver/service/ReservationService.java), lời gọi `requestHash(cmd)` và method `requestHash`.
+**Vị trí:** [ReservationService.java](../src/driver-service/src/main/java/com/ridehailing/driver/service/ReservationService.java), lời gọi `requestHash(cmd)` và method `requestHash`.
 
 Hash chỉ nhận body; `reservationId` là path parameter nên không được ràng buộc với processed command. Dedup chạy trước kiểm tra reservation đích.
 
@@ -117,7 +117,7 @@ Hash chỉ nhận body; `reservationId` là path parameter nên không được 
 
 **Task:** T10.
 
-**Vị trí:** [ReservationService.java](../driver-service/src/main/java/com/ridehailing/driver/service/ReservationService.java), dòng 97–113; DTO dùng `long` nhưng repository/schema dùng `int`/`INT`.
+**Vị trí:** [ReservationService.java](../src/driver-service/src/main/java/com/ridehailing/driver/service/ReservationService.java), dòng 97–113; DTO dùng `long` nhưng repository/schema dùng `int`/`INT`.
 
 Chỉ kiểm tra version nhỏ hơn 1; sau đó cast `(int) cmd.commandVersion()` khi lưu. Response vẫn chứa giá trị long ban đầu.
 
@@ -133,7 +133,7 @@ Chỉ kiểm tra version nhỏ hơn 1; sau đó cast `(int) cmd.commandVersion()
 
 **Task:** T12.
 
-**Vị trí:** [TripService.java](../trip-service/src/main/java/com/ridehailing/trip/service/TripService.java), dòng 134–141; [TripRepository.java](../trip-service/src/main/java/com/ridehailing/trip/repo/TripRepository.java), tham số `int offset`.
+**Vị trí:** [TripService.java](../src/trip-service/src/main/java/com/ridehailing/trip/service/TripService.java), dòng 134–141; [TripRepository.java](../src/trip-service/src/main/java/com/ridehailing/trip/repo/TripRepository.java), tham số `int offset`.
 
 `page` chỉ được kiểm tra không âm. Phép nhân `page * effectiveSize` chạy bằng int; có thể tràn sang số âm trước khi truyền vào PostgreSQL.
 

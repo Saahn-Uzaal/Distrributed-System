@@ -72,11 +72,11 @@ F14 tái hiện bằng service/repository production, transaction PostgreSQL th�
 
 | ID | Ưu tiên / bằng chứng | Phát hiện và ảnh hưởng | Vị trí chính |
 |---|---|---|---|
-| F15 | P2 / D | Request dùng token A nhận 401 muộn sẽ clearSession vô điều kiện, xóa luôn phiên B vừa đăng nhập. | `web/src/api/client.ts:57–58` |
-| F16 | P2 / D | Login/register cũ hoàn tất sau khi rời trang có thể ghi đè phiên mới và điều hướng lại. Logout/new auth không vô hiệu hóa continuation cũ. | `web/src/pages/LoginPage.tsx:17–19`; `RegisterPage.tsx:23–27` |
-| F17 | P3 / D | Validation frontend/backend còn lệch về trim Unicode, mật khẩu toàn khoảng trắng và email >254 ký tự. | `web/src/auth/validation.ts:24,35–36`; `RegisterPage.tsx:39,65`; `LoginPage.tsx:31` |
-| F18 | P3 / S | Register đã 201 nhưng auto-login lỗi vẫn giữ luồng như đăng ký thất bại; submit lại đăng ký sẽ EMAIL_TAKEN. | `web/src/pages/RegisterPage.tsx:23–29` |
-| F19 | P3 / S | /me lỗi mạng/5xx bị gộp với chưa xác thực và chuyển về login dù session có thể vẫn hợp lệ; không có trạng thái retry lỗi tạm thời. | `web/src/hooks/useMe.ts:16`; `PassengerHome.tsx:16`; `DriverHome.tsx:16` |
+| F15 | P2 / D | Request dùng token A nhận 401 muộn sẽ clearSession vô điều kiện, xóa luôn phiên B vừa đăng nhập. | `src/web/src/api/client.ts:57–58` |
+| F16 | P2 / D | Login/register cũ hoàn tất sau khi rời trang có thể ghi đè phiên mới và điều hướng lại. Logout/new auth không vô hiệu hóa continuation cũ. | `src/web/src/pages/LoginPage.tsx:17–19`; `RegisterPage.tsx:23–27` |
+| F17 | P3 / D | Validation frontend/backend còn lệch về trim Unicode, mật khẩu toàn khoảng trắng và email >254 ký tự. | `src/web/src/auth/validation.ts:24,35–36`; `RegisterPage.tsx:39,65`; `LoginPage.tsx:31` |
+| F18 | P3 / S | Register đã 201 nhưng auto-login lỗi vẫn giữ luồng như đăng ký thất bại; submit lại đăng ký sẽ EMAIL_TAKEN. | `src/web/src/pages/RegisterPage.tsx:23–29` |
+| F19 | P3 / S | /me lỗi mạng/5xx bị gộp với chưa xác thực và chuyển về login dù session có thể vẫn hợp lệ; không có trạng thái retry lỗi tạm thời. | `src/web/src/hooks/useMe.ts:16`; `PassengerHome.tsx:16`; `DriverHome.tsx:16` |
 
 F15 dùng production API/session code với deferred fetch: gửi A, lưu B, resolve 401 của A → B bị xóa. F16 thực thi production LoginPage qua transpile với React/router test doubles: login B hoàn tất trước, login A của component đã rời trang hoàn tất sau → storage B bị đổi lại thành A. Đây là hai điểm commit phiên khác nhau; cần request/session generation và kiểm tra lifetime, không chỉ hủy setState của useMe.
 
@@ -112,7 +112,7 @@ Gateway probe hiện tại: `/api/auth/me` khi upstream không chạy → 502 te
 | F27 | P2 / D | Mật khẩu DB được nối trực tiếp vào SQL literal. Password hợp lệ có apostrophe làm init PostgreSQL fail, có thể để volume đã khởi tạo nhưng thiếu DB/user. | `infra/postgres/init/01-create-databases.sh:8,13,18,23,28` |
 | F28 | P2 / D | User/password RabbitMQ được ghép thẳng vào AMQP URI, không percent-encode. Password có `#` làm parser lỗi thay vì declare topology. | `infra/rabbitmq/declare_topology.es:31` |
 | F29 | P2 / D | Script topology source .env như Bash; không tương đương dotenv của Compose. File Compose hợp lệ có password chứa space không quote làm script fail trước khi gọi Docker. | `infra/rabbitmq/declare-topology.sh:16` |
-| F30 | P2 / D | Dependency audit có 8 package entries còn advisory, gồm 2 critical/1 high theo npm; cần đánh giá và nâng các cây dependency liên quan. Điều kiện dev/test server phải được phân biệt với bundle production. | `web/package.json:15,22,23`; `web/package-lock.json` |
+| F30 | P2 / D | Dependency audit có 8 package entries còn advisory, gồm 2 critical/1 high theo npm; cần đánh giá và nâng các cây dependency liên quan. Điều kiện dev/test server phải được phân biệt với bundle production. | `src/web/package.json:15,22,23`; `src/web/package-lock.json` |
 | F31 | P2 / S | Contract cancel yêu cầu publish event hủy matching, nhưng catalog chỉ có 6 event, không định nghĩa event/routing/payload này; outbox CHECK cũng chỉ 6 loại. Task T20 sẽ không có contract đầy đủ để làm đúng câu yêu cầu đó. | `docs/api-contracts.md:219`; `docs/events.md:53`; Trip migration `V2__trips.sql` bảng outbox |
 | F32 | P3 / S | Docker tags còn trôi theo patch/rebuild: RabbitMQ 3-management-alpine, PostgreSQL 17-alpine, Nginx 1.27-alpine. Escript còn copy record từ RabbitMQ 3.13.7, nên clean pull không khóa đúng build đã kiểm chứng. | `deploy/compose.yaml:10,38,63`; `infra/rabbitmq/declare-topology.sh:39`; `declare_topology.es:17` |
 

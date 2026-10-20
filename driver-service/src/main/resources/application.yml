@@ -1,0 +1,36 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: driver-service
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/driver_db
+    username: driver_svc
+    password: ${DRIVER_DB_PASSWORD:driver_dev_2026}
+
+# T07 — security (contract api-contracts.md §1/§2): verify JWT RS256 bằng public key;
+# internal API credential X-Internal-Token = env INTERNAL_API_TOKEN (dev token dùng chung).
+jwt:
+  public-key-path: ${JWT_PUBLIC_KEY_PATH:keys/jwt-public.pem}
+internal:
+  api-token: ${INTERNAL_API_TOKEN:}
+
+# T09 — candidates: heartbeat stale threshold (contract §4.2 chốt HEARTBEAT_STALE_AFTER_MS=15000)
+driver:
+  heartbeat-stale-after-ms: ${HEARTBEAT_STALE_AFTER_MS:15000}
+
+reservation:
+  expiry:
+    enabled: ${RESERVATION_EXPIRY_ENABLED:true}
+    fixed-delay-ms: ${RESERVATION_EXPIRY_FIXED_DELAY_MS:1000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: info

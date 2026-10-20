@@ -1,0 +1,40 @@
+# Build output
+target/
+*.class
+*.jar
+!.mvn/wrapper/*.jar
+
+# Local env & secrets (never commit real keys)
+.env
+*.env
+!.env.example
+*.pem
+*.key
+dev-keys/
+keys/
+
+# Logs
+logs/
+*.log
+
+# Local data / databases / chunk storage
+data/
+*.db
+*.sqlite
+*.tmp
+*.part
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend (T08) — web/ đã chuyển sang src/web/ (C02); giữ cả hai pattern trong lúc transition
+web/node_modules/
+web/dist/
+src/web/node_modules/
+src/web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml

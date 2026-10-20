@@ -1,0 +1,81 @@
+# DS03 — local infrastructure (T04: PostgreSQL riêng quyền + RabbitMQ; T08: Nginx)
+# Chạy: docker compose --env-file .env -f deploy/compose.yaml up -d
+# Ghi chú: 5 backend services chạy là tiến trình Java local trên host (runbook README);
+# nginx container proxy /api/* tới host.docker.internal. Khi container hóa services ở T29,
+# đổi proxy_pass sang DNS tên service compose.
+name: ridehailing
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ridehailing-postgres
+    restart: unless-stopped
+    environment:
+      # Admin chỉ dùng cho init/debug — KHÔNG phải tài khoản của service nào
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      # Mật khẩu 5 tài khoản service (init script đọc từ đây)
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD}
+      DRIVER_DB_PASSWORD: ${DRIVER_DB_PASSWORD}
+      TRIP_DB_PASSWORD: ${TRIP_DB_PASSWORD}
+      MATCHING_DB_PASSWORD: ${MATCHING_DB_PASSWORD}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Bind localhost only (debug) — spec mục 12
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U $${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks: [backend]
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: ridehailing-rabbitmq
+    restart: unless-stopped
+    environment:
+      # Dev-only credentials từ .env (spec mục 9/12)
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      # Bind localhost only cho dev — spec mục 12
+      - "127.0.0.1:${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"
+    volumes:
+      # Dữ liệu broker (queues, messages persistent) giữ sau restart — spec mục 9/12
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 20s
+    networks: [backend]
+
+  # T08 — Nginx: phục vụ frontend build (web/dist) + proxy /api/* tới services local trên host.
+  # Public port 8080 theo spec §12. Config: deploy/nginx/nginx.conf.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: ridehailing-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Build frontend trước khi up nginx (npm run build ở web/)
+      - ../web/dist:/usr/share/nginx/html:ro
+    networks: [backend]
+
+volumes:
+  pgdata:
+  rabbitmq_data:
+
+networks:
+  # Mạng chung cho infra (và services khi containerized ở T29) — DNS theo tên service
+  backend:
+    name: ridehailing_net

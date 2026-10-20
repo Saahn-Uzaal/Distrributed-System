@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- T07 (R05 fix) — structured JSON logging theo spec §11: timestamp UTC, service, instanceId,
+     level, eventType, correlationId, tripId/reservationId nếu có, result, durationMs. -->
+<configuration>
+    <springProperty scope="context" name="serviceName" source="spring.application.name"/>
+
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <layout class="com.ridehailing.identity.logging.JsonLogLayout">
+            <service>${serviceName}</service>
+        </layout>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="JSON_CONSOLE"/>
+    </root>
+</configuration>

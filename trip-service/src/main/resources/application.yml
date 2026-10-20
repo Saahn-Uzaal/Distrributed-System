@@ -1,0 +1,30 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: trip-service
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/trip_db
+    username: trip_svc
+    password: ${TRIP_DB_PASSWORD:trip_dev_2026}
+
+# T07 — security (contract api-contracts.md §1/§2): verify JWT RS256 bằng public key.
+jwt:
+  public-key-path: ${JWT_PUBLIC_KEY_PATH:keys/jwt-public.pem}
+
+# T12 — fare server-side (contract api-contracts.md §3.3):
+# fareVnd = FARE_BASE_VND + ceil(distanceM/1000) * FARE_PER_KM_VND.
+fare:
+  base-vnd: ${FARE_BASE_VND:12000}
+  per-km-vnd: ${FARE_PER_KM_VND:5000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: info

@@ -1,0 +1,20 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: matching-service
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/matching_db
+    username: matching_svc
+    password: ${MATCHING_DB_PASSWORD:matching_dev_2026}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: info

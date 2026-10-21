@@ -89,28 +89,57 @@ public class DriverRepository {
 
     /**
      * CAS availability: chỉ cho phép khi state hiện tại OFFLINE/AVAILABLE (state machine §4 —
-     * PUT không có transition từ RESERVED/BUSY). Trả số dòng cập nhật.
+     * PUT không có transition từ RESERVED/BUSY).
+     * T09-1 (F07): DB tự gán last_seen_at SAU khi giành được khóa row bằng
+     * GREATEST(last_seen_at, clock_timestamp()) ... RETURNING — timestamp không lùi,
+     * cùng nguồn đồng hồ với cutoff heartbeat (T10-1/R04). Trả giá trị thực đã lưu.
      */
-    public int updateAvailabilityIfFree(UUID driverId, String newStatus, Instant now) {
-        return jdbc.update(
-                "UPDATE drivers SET status = ?, last_seen_at = ?, updated_at = ? "
-                        + "WHERE id = ? AND status IN ('OFFLINE', 'AVAILABLE')",
-                newStatus, Timestamp.from(now), Timestamp.from(now), driverId);
+    public Optional<Instant> updateAvailabilityIfFree(UUID driverId, String newStatus) {
+        List<Instant> rows = jdbc.query(
+                "UPDATE drivers SET status = ?, last_seen_at = GREATEST(last_seen_at, clock_timestamp()),"
+                        + " updated_at = clock_timestamp(), version = version + 1"
+                        + " WHERE id = ? AND status IN ('OFFLINE', 'AVAILABLE') RETURNING last_seen_at",
+                new Object[]{newStatus, driverId}, (rs, rowNum) -> rs.getTimestamp("last_seen_at").toInstant());
+        return rows.stream().findFirst();
     }
 
-    /** Cập nhật tọa độ + heartbeat; cho phép ở mọi state (contract §3.2). */
-    public int updateLocation(UUID driverId, double latitude, double longitude, Instant now) {
-        return jdbc.update(
-                "UPDATE drivers SET latitude = ?, longitude = ?, last_seen_at = ?, updated_at = ? WHERE id = ?",
-                latitude, longitude, Timestamp.from(now), Timestamp.from(now), driverId);
+    /** Cập nhật tọa độ + heartbeat; cho phép ở mọi state (contract §3.2). T09-1: DB gán thời gian.
+     * Trả last_seen_at thực đã lưu (null nếu không có row). */
+    public Optional<Instant> updateLocation(UUID driverId, double latitude, double longitude) {
+        List<Instant> rows = jdbc.query(
+                "UPDATE drivers SET latitude = ?, longitude = ?,"
+                        + " last_seen_at = GREATEST(last_seen_at, clock_timestamp()), updated_at = clock_timestamp()"
+                        + " WHERE id = ? RETURNING last_seen_at",
+                new Object[]{latitude, longitude, driverId}, (rs, rowNum) -> rs.getTimestamp("last_seen_at").toInstant());
+        return rows.stream().findFirst();
     }
 
-    /** Driver AVAILABLE + heartbeat còn mới (last_seen_at > cutoff) + đã có tọa độ. */
-    public List<DriverRow> findAvailableWithFreshHeartbeat(Instant cutoff) {
+    /**
+     * T09-5 (R05): candidates — lọc sơ bộ trong SQL: status + heartbeat mới (cutoff tính bằng
+     * clock_timestamp() - make_interval, cùng nguồn đồng hồ với CAS reserve) + bounding box
+     * (lat ± radius/111 km, lng ± /(cos lat)) + ORDER BY khoảng cách xấp xỉ trên mặt cầu,
+     * LIMIT hữu hạn. Haversine chính xác vẫn tính trong Java phía caller.
+     */
+    public List<DriverRow> findCandidatesInBox(double latitude, double longitude, int radiusM,
+                                               long heartbeatStaleAfterMs, int limit) {
+        double latDelta = (radiusM / 1000.0) / 111.0;
+        double cosLat = Math.max(Math.cos(Math.toRadians(latitude)), 1e-6);
+        double lngDelta = (radiusM / 1000.0) / (111.0 * cosLat);
         return jdbc.query(
-                "SELECT * FROM drivers WHERE status = 'AVAILABLE' AND last_seen_at > ? "
-                        + "AND latitude IS NOT NULL AND longitude IS NOT NULL",
-                new Object[]{Timestamp.from(cutoff)}, this::mapDriver);
+                "SELECT * FROM drivers"
+                        + " WHERE status = 'AVAILABLE'"
+                        + " AND last_seen_at > clock_timestamp() - make_interval(secs => ?)"
+                        + " AND latitude IS NOT NULL AND longitude IS NOT NULL"
+                        + " AND latitude BETWEEN ? AND ?"
+                        + " AND longitude BETWEEN ? AND ?"
+                        + " ORDER BY (latitude - ?) * (latitude - ?)"
+                        + "          + (longitude - ?) * (longitude - ?) * cos(radians(?)) * cos(radians(?)) ASC"
+                        + " LIMIT ?",
+                new Object[]{heartbeatStaleAfterMs / 1000.0,
+                        latitude - latDelta, latitude + latDelta,
+                        longitude - lngDelta, longitude + lngDelta,
+                        latitude, latitude, longitude, longitude, latitude, latitude, limit},
+                this::mapDriver);
     }
 
     // RowMapper-compatible: (ResultSet, int). Method reference 1-arg (ResultSet)

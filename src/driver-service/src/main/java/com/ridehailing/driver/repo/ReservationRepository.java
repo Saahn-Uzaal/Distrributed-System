@@ -71,6 +71,32 @@ public class ReservationRepository {
                 (rs, rowNum) -> Boolean.TRUE, "reservation:" + id);
     }
 
+    /** T11-1 (F08): non-blocking variant — false nếu item đang bị giữ bởi transaction khác. */
+    public boolean tryLockReservation(UUID id) {
+        Boolean locked = jdbc.queryForObject(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(?, 0))",
+                Boolean.class, "reservation:" + id);
+        return Boolean.TRUE.equals(locked);
+    }
+
+    /** T11-1 (F08): giới hạn thời gian chờ khóa row trong transaction hiện tại. */
+    public void setLocalLockTimeout(String value) {
+        jdbc.execute("SET LOCAL lock_timeout = '" + value.replace("'", "") + "'");
+    }
+
+    /** T10-4 (R04): đồng hồ duy nhất cho mọi so sánh hạn — PostgreSQL clock_timestamp(). */
+    public Instant dbNow() {
+        Timestamp now = jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class);
+        return now.toInstant();
+    }
+
+    /** Dọn processed_commands cũ hơn N ngày (T09-6, batch hữu hạn). */
+    public int deleteOldProcessedCommands(int days) {
+        return jdbc.update(
+                "DELETE FROM processed_commands WHERE created_at < clock_timestamp() - make_interval(days => ?) LIMIT 1000",
+                days);
+    }
+
     // --- reservations ---
 
     public Optional<ReservationRow> findById(UUID id) {
@@ -94,13 +120,18 @@ public class ReservationRepository {
     /**
      * CAS reserve (state-machines.md §3): chỉ thành công khi driver AVAILABLE và heartbeat còn mới.
      * affected rows != 1 -> caller rollback toàn transaction (reservation insert bị hủy).
+     * T10-1 (F06) + T10-4 (R04): cutoff heartbeat được đánh giá TRONG câu SQL bằng
+     * clock_timestamp() - make_interval(secs => ?), tức là SAU khi PostgreSQL giành được
+     * khóa row — không dùng timestamp JVM tính trước.
      */
-    public int casReserveDriver(UUID driverId, UUID reservationId, Instant heartbeatCutoff) {
+    public int casReserveDriver(UUID driverId, UUID reservationId, double heartbeatStaleAfterSecs) {
         return jdbc.update(
-                "UPDATE drivers SET status = 'RESERVED', current_reservation_id = ?, updated_at = now() "
-                        + "WHERE id = ? AND status = 'AVAILABLE' AND last_seen_at > ?"
+                "UPDATE drivers SET status = 'RESERVED', current_reservation_id = ?,"
+                        + " updated_at = clock_timestamp(), version = version + 1"
+                        + " WHERE id = ? AND status = 'AVAILABLE'"
+                        + " AND last_seen_at > clock_timestamp() - make_interval(secs => ?)"
                         + " AND current_reservation_id IS NULL AND current_trip_id IS NULL",
-                reservationId, driverId, Timestamp.from(heartbeatCutoff));
+                reservationId, driverId, heartbeatStaleAfterSecs);
     }
 
     public void insertTombstone(UUID id, int version, String reason) {
@@ -133,14 +164,16 @@ public class ReservationRepository {
                 + " updated_at=now() WHERE id=?", state, reason, version, id);
     }
 
+    /** T10-4 (R04): clock_timestamp() thay now() — now() là thời điểm bắt đầu transaction,
+     * còn expiry phải so sánh với thời điểm thực tại. */
     public List<UUID> findExpiredIds(int limit) {
-        return jdbc.query("SELECT id FROM reservations WHERE state='RESERVED' AND expires_at<=now()"
+        return jdbc.query("SELECT id FROM reservations WHERE state='RESERVED' AND expires_at<=clock_timestamp()"
                 + " ORDER BY expires_at, id LIMIT ?", (rs, n) -> (UUID) rs.getObject("id"), limit);
     }
 
     public int expireReserved(UUID id) {
         return jdbc.update("UPDATE reservations SET state='EXPIRED', terminal_reason='OFFER_EXPIRED',"
-                + " updated_at=now() WHERE id=? AND state='RESERVED' AND expires_at<=now()", id);
+                + " updated_at=clock_timestamp() WHERE id=? AND state='RESERVED' AND expires_at<=clock_timestamp()", id);
     }
 
     private ProcessedCommand mapProcessed(ResultSet rs, int rowNum) throws SQLException {

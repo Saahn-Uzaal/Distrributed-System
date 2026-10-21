@@ -400,3 +400,45 @@ Kiểm chứng: 3 tài liệu contract nhất quán (đọc lại sau sửa); kh
 
 ### Trạng thái FIX_LIST
 T07-6..T07-10 + T07-14 đánh dấu `[x]` kèm bằng chứng. Còn mở: T07-11 (N03 body limit), T07-12 (N08 internal token rỗng/.env), T07-13 (Q01 secret-scan toàn luồng — một phần đã phủ bởi test audit identity).
+
+## Lượt 2026-10-21 — FIX_LIST T01–T12: Phase 5 (T09–T12 correctness/time)
+
+### Việc đã làm
+- **T09-1 (F07):** `DriverRepository.updateLocation/updateAvailabilityIfFree` gán `SET last_seen_at = GREATEST(last_seen_at, clock_timestamp()) ... RETURNING last_seen_at` và trả giá trị đó — DB tự gán thời gian sau khi giành được khóa.
+- **T09-2 (F11):** Haversine clamp `a` về [0,1] trước `atan2`, ném lỗi nếu kết quả không hữu hạn (driver + trip).
+- **T09-3 (F13):** CAS thất bại → đọc lại driver, lấy tripId từ `current_trip_id` hoặc từ reservation của `current_reservation_id`.
+- **T09-4 (N31):** `normalizePlate()` (trim/uppercase/gộp khoảng trắng) trước khi kiểm tra và lưu; migration V5 chuẩn hóa dữ liệu cũ + unique index `uq_vehicles_plate_upper` trên `upper(plate_number)`; `isPlateUniqueViolation` khớp cả tên constraint mới lẫn cũ.
+- **T09-5 (R05):** `findCandidatesInBox(lat,lng,radiusM,staleMs,limit)` — bounding box trong SQL + LIMIT rồi mới Haversine trong Java.
+- **T09-6 (N32 driver):** V5 thêm `drivers.version` (BIGINT NOT NULL DEFAULT 1) + `vehicles.updated_at`; `ProcessedCommandCleanupWorker` mới xóa processed_commands cũ hơn N ngày (gated `app.flyway.enabled`).
+- **T10-1 (F06):** cutoff heartbeat trong chính SQL CAS: `last_seen_at > clock_timestamp() - make_interval(secs => ?)` — PostgreSQL đánh giá lại sau khi có khóa row.
+- **T10-2 (F10/N29):** kiểm tra khoảng `(now, now + OFFER_TTL_MAX]` bằng `dbNow()` trong `doReserve()`, chỉ cho reservation MỚI (replay command cũ trả response đã lưu theo contract §4.1); env mới `RESERVATION_OFFER_TTL_MAX_MS=120000`.
+- **T10-3 (F12):** `isTripAttemptUniqueViolation` — SQLState 23505 trong cause chain + constraint `uq_reservations_trip_attempt`; DataIntegrityViolationException khác ném tiếp (handler → 500).
+- **T10-4 (R04):** một nguồn đồng hồ duy nhất: `dbNow()`/`clock_timestamp()` cho recheck confirm, `expireReserved/findExpiredIds`, cutoff heartbeat; không còn `Instant.now()` trong các phép so sánh hạn.
+- **T10-5 (R01 driver):** `canonicalDouble()` — -0.0 → "0.0" trước khi băm; quy tắc canonical chốt contract §4.1.
+- **T11-1 (F08):** `expireIfUnlocked` dùng `pg_try_advisory_xact_lock` (bỏ qua item đang bị khóa) + `SET LOCAL lock_timeout 2s`; worker try/catch từng item kèm log.error.
+- **T11-2 (F09):** `checkVersion` chặn `version > stored + MAX_VERSION_STEP(1000)` → 400 INVALID_INPUT; chốt contract §4.1.
+- **T11-3 (N30):** release trên CONFIRMED chỉ chấp nhận reason CANCELLED, khác → 409 STATE_CONFLICT (contract §4.2 cập nhật).
+- **T12-1 (F14):** một timestamp duy nhất `Instant.now().truncatedTo(SECONDS)` dùng cho response, bản lưu replay, `trips.created_at` và `outbox.occurred_at`.
+- **T12-2 (N33):** migration V4 thêm cột envelope outbox (`aggregate_version/schema_version/producer/routing_key/attempts/next_attempt_at/last_error`); `insertPending(..., aggregateVersion=1, routingKey="trip.requested")`.
+- **T12-3 (N32 trip):** V4 thêm `trips.reservation_id` + unique index `uq_trip_events_trip_type_version`; giữ BIGSERIAL cho `trip_events.id` — lệch đặc tả có chủ đích (id nội bộ history); `IdempotencyKeyCleanupWorker` mới xóa key cũ > 24 h.
+- **T12-4 (R01 trip):** `canonicalDouble()` trong `TripService.requestHash`; chốt contract §3.3.
+- **T12-5 (R02):** `list()` đặt `@Transactional(readOnly=true, isolation=Isolation.REPEATABLE_READ)` — count và content cùng snapshot.
+- **T12-7 (N20):** 9 test classes chuyển sang `RANDOM_PORT` + `@LocalServerPort`, bỏ `server.port=...` cố định.
+
+### Tests mới / sửa
+- Mới: `HeartbeatClockIntegrationTest` ×2 (T09-1 giữ row lock 750 ms → lastSeenAt fresh theo DB clock + vẫn trong candidates; T10-1 giữ 1200 ms → reserve 409 DRIVER_NOT_AVAILABLE, không row), `HaversineTest` ×2 module ×4 tests (đối cực = round(π·6371088.8) = 20_015_114 m; NaN/Inf → IllegalArgumentException), `DriverProfileIntegrationTest.offlineConflictResolvesTripIdFromReservationWhenCurrentTripIsNull` + `plateNormalizationMakesCaseAndWhitespaceDuplicatesConflict`, `reserveRejectsExpiresOutsideOfferTtlWindow` (quá khứ/+1h/9999-12-31 → 400), `confirmWithHugeVersionIsRejectedButNormalFlowWorks`, `offerExpiredReleaseOnConfirmedIsStateConflict`, `expiryWorkerSkipsLockedReservationButExpiresOthers` + `ReservationExpiryWorkerTest` (cô lập lỗi Mockito), `TripIntegrationTest`: `createdAtIsStableAcrossGetAndReplay`, `outboxRowCarriesAggregateVersionAndRoutingKey`, `negativeZeroLatitudeReplaysInsteadOfMismatch`, `listUnderRepeatableReadStaysConsistentWithConcurrentCreates`; unit `ReservationServiceHashTest` ×3 (T10-5).
+- Sửa: `maxIntCommandVersionIsStoredAndReadWithoutTruncation` → viết lại thành `reserveWithHugeCommandVersionIsRejected` (INT_MAX → 400, không row); test nâng cấp v3/v2 assert version hiện tại "5"/"4" (driver V1–V5, trip V1–V4).
+
+### Lệnh đã chạy và kết quả thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` (root, JDK 21) | **BUILD SUCCESS** — identity **25**, driver **98**, trip **55**, matching **8**, payment **8** = **194 tests / 0 failures/errors/skipped** |
+
+### Ghi chú kỹ thuật
+- Spring Framework 7: `@Transactional(isolation=...)` nhận enum `org.springframework.transaction.annotation.Isolation` (không phải String, không nằm trong `org.springframework.transaction`) — verify trên jar spring-tx 7.0.9.
+- Boot 4: `@LocalServerPort` ở package `org.springframework.boot.test.web.server` (verify trên jar spring-boot-test 4.1.1).
+- `Instant.parse("300000-01-01T00:00:00Z")` fail trên JDK này → test far-future dùng `9999-12-31T23:59:59Z`.
+- Driver migrations V1–V5, trip V1–V4; test upgrade chạy full-migrate trên schema legacy (V4/V5 an toàn với dữ liệu cũ — cột mới có default/nullable).
+
+### Trạng thái FIX_LIST
+T09-1..6, T10-1..5, T11-1..3, T12-1..5, T12-7 đánh dấu `[x]` kèm bằng chứng. **T12-6 (N28) vẫn mở** — trì hoãn sang phase 8 sau khi chốt T05-10.

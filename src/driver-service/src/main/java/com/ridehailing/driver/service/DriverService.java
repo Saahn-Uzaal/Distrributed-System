@@ -6,6 +6,7 @@ import com.ridehailing.driver.exception.PlateTakenException;
 import com.ridehailing.driver.exception.StateConflictException;
 import com.ridehailing.driver.geo.Haversine;
 import com.ridehailing.driver.repo.DriverRepository;
+import com.ridehailing.driver.repo.ReservationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -49,18 +50,24 @@ public class DriverService {
     private static final Logger log = LoggerFactory.getLogger(DriverService.class);
 
     private final DriverRepository repo;
+    private final ReservationRepository reservationRepo;
     private final long heartbeatStaleAfterMs;
 
-    public DriverService(DriverRepository repo,
+    public DriverService(DriverRepository repo, ReservationRepository reservationRepo,
                          @Value("${driver.heartbeat-stale-after-ms:15000}") long heartbeatStaleAfterMs) {
         this.repo = repo;
+        this.reservationRepo = reservationRepo;
         this.heartbeatStaleAfterMs = heartbeatStaleAfterMs;
     }
 
-    /** POST /api/drivers/me/profile — idempotent theo userId (chốt §3.2). */
+    /** POST /api/drivers/me/profile — idempotent theo userId (chốt §3.2).
+     * T09-4 (N31): plate chuẩn hóa (trim + uppercase + gộp khoảng trắng) trước khi kiểm tra/lưu;
+     * displayName lưu đã trim (như Identity với fullName). */
     @Transactional
     public ProfileResult createProfile(UUID userId, String displayName, String plateNumber, String vehicleType) {
-        validateProfileInput(displayName, plateNumber, vehicleType);
+        String normalizedPlate = normalizePlate(plateNumber);
+        String trimmedName = displayName == null ? null : displayName.trim();
+        validateProfileInput(trimmedName, normalizedPlate, vehicleType);
         // Serialize creation by authenticated user, including the first request with no row yet.
         repo.lockProfileUser(userId);
         var existing = repo.findByUserId(userId);
@@ -69,8 +76,8 @@ public class DriverService {
             return new ProfileResult(existing.get().id(), false, toProfile(existing.get()));
         }
         try {
-            DriverRepository.VehicleRow vehicle = repo.insertVehicle(plateNumber, vehicleType);
-            DriverRepository.DriverRow driver = repo.insertDriver(userId, displayName, vehicle.id());
+            DriverRepository.VehicleRow vehicle = repo.insertVehicle(normalizedPlate, vehicleType);
+            DriverRepository.DriverRow driver = repo.insertDriver(userId, trimmedName, vehicle.id());
             return new ProfileResult(driver.id(), true, toProfile(driver));
         } catch (DataIntegrityViolationException e) {
             if (isPlateUniqueViolation(e)) {
@@ -91,21 +98,31 @@ public class DriverService {
         }
         DriverRepository.DriverRow driver = repo.findByUserId(userId)
                 .orElseThrow(() -> new NotFoundException("Driver profile not found."));
-        Instant now = Instant.now();
-        int updated = repo.updateAvailabilityIfFree(driver.id(), status, now);
-        if (updated == 0) {
+        // T09-1 (F07): DB gán last_seen_at sau khi giành khóa row; trả giá trị thực đã lưu.
+        java.util.Optional<Instant> updated = repo.updateAvailabilityIfFree(driver.id(), status);
+        if (updated.isEmpty()) {
             // State hiện tại RESERVED/BUSY — mọi request availability đều 409 (chốt T09).
+            // T09-3 (F13): đọc LẠI sau CAS thất bại để lấy state/tripId mới nhất
+            // (tripId từ current_trip_id, hoặc từ reservation của current_reservation_id nếu RESERVED).
+            DriverRepository.DriverRow fresh = repo.findById(driver.id())
+                    .orElseThrow(() -> new NotFoundException("Driver profile not found."));
+            UUID tripId = fresh.currentTripId();
+            if (tripId == null && fresh.currentReservationId() != null) {
+                tripId = reservationRepo.findById(fresh.currentReservationId())
+                        .map(ReservationRepository.ReservationRow::tripId)
+                        .orElse(null);
+            }
             Map<String, Object> details = new LinkedHashMap<>();
-            details.put("state", driver.status());
-            details.put("tripId", driver.currentTripId());
+            details.put("state", fresh.status());
+            details.put("tripId", tripId);
             throw new StateConflictException(
-                    "Driver is not free to change availability while " + driver.status() + ".", details);
+                    "Driver is not free to change availability while " + fresh.status() + ".", details);
         }
         // N11 audit: driver_availability_changed — chỉ userId + status mới.
         MDC.put("eventType", "driver_availability_changed");
         MDC.put("result", "SUCCESS");
         log.info("driver availability changed userId={} status={}", userId, status);
-        return new AvailabilityResult(driver.id(), status, now);
+        return new AvailabilityResult(driver.id(), status, updated.get());
     }
 
     /** PUT /api/drivers/me/location — cập nhật tọa độ + heartbeat; mọi state (chốt §3.2). */
@@ -114,12 +131,12 @@ public class DriverService {
         validateCoordinates(latitude, longitude);
         DriverRepository.DriverRow driver = repo.findByUserId(userId)
                 .orElseThrow(() -> new NotFoundException("Driver profile not found."));
-        Instant now = Instant.now();
-        int updated = repo.updateLocation(driver.id(), latitude, longitude, now);
-        if (updated == 0) {
+        // T09-1 (F07): DB gán last_seen_at sau khi giành khóa row; trả giá trị thực đã lưu.
+        java.util.Optional<Instant> updated = repo.updateLocation(driver.id(), latitude, longitude);
+        if (updated.isEmpty()) {
             throw new NotFoundException("Driver profile not found.");
         }
-        return new LocationResult(driver.id(), now);
+        return new LocationResult(driver.id(), updated.get());
     }
 
     /** GET /internal/drivers/candidates — AVAILABLE + heartbeat mới, deterministic order. */
@@ -133,8 +150,11 @@ public class DriverService {
         }
         int capped = Math.min(limit, MAX_CANDIDATES);
 
-        Instant cutoff = Instant.now().minusMillis(heartbeatStaleAfterMs);
-        List<DriverRepository.DriverRow> rows = repo.findAvailableWithFreshHeartbeat(cutoff);
+        // T09-5 (R05): bounding box + LIMIT trong SQL; cutoff heartbeat tính bằng clock_timestamp()
+        // trong chính câu SQL (cùng nguồn đồng hồ với CAS reserve — T10-1/R04).
+        int fetchLimit = Math.max(capped * 4, 20);
+        List<DriverRepository.DriverRow> rows = repo.findCandidatesInBox(lat, lng, radiusM,
+                heartbeatStaleAfterMs, fetchLimit);
         List<Candidate> candidates = new ArrayList<>();
         for (DriverRepository.DriverRow row : rows) {
             long distanceM = Haversine.meters(lat, lng, row.latitude(), row.longitude());
@@ -148,12 +168,21 @@ public class DriverService {
         return candidates.stream().limit(capped).toList();
     }
 
+    /** T09-4 (N31): chuẩn hóa biển số — trim, uppercase, gộp chuỗi khoảng trắng thành một. */
+    static String normalizePlate(String raw) {
+        if (raw == null) return null;
+        return raw.trim().toUpperCase().replaceAll("\\s+", " ");
+    }
+
     private static void validateProfileInput(String displayName, String plateNumber, String vehicleType) {
-        if (displayName == null || displayName.trim().length() < 2 || displayName.length() > 60) {
+        // displayName/plate đã được chuẩn hóa trước khi gọi vào đây (T09-4).
+        if (displayName == null || displayName.length() < 2 || displayName.length() > 60) {
             throw new InvalidInputException("displayName must be 2-60 characters.");
         }
-        if (plateNumber == null || plateNumber.length() < 3 || plateNumber.length() > 20) {
-            throw new InvalidInputException("plateNumber must be 3-20 characters.");
+        if (plateNumber == null || plateNumber.length() < 3 || plateNumber.length() > 20
+                || !plateNumber.matches("^[A-Z0-9.\\- ]+$")) {
+            throw new InvalidInputException(
+                    "plateNumber must be 3-20 characters of [A-Z0-9.-space].");
         }
         if (!"MOTORBIKE".equals(vehicleType) && !"CAR".equals(vehicleType)) {
             throw new InvalidInputException("vehicleType must be MOTORBIKE or CAR.");
@@ -170,9 +199,10 @@ public class DriverService {
     }
 
     private static boolean isPlateUniqueViolation(DataIntegrityViolationException e) {
-        // PostgreSQL: message chứa tên unique key (vd 'violates unique constraint \"vehicles_plate_number_key\"').
+        // PostgreSQL: message chứa tên unique key. V5 đổi constraint thành expression index
+        // uq_vehicles_plate_upper; giữ cả hai chuỗi để an toàn với dữ liệu/schema cũ.
         String msg = e.getMessage() == null ? "" : e.getMessage();
-        return msg.contains("vehicles_plate_number");
+        return msg.contains("uq_vehicles_plate_upper") || msg.contains("vehicles_plate_number");
     }
 
     private Profile toProfile(DriverRepository.DriverRow driver) {

@@ -50,19 +50,26 @@ public class ReservationService {
     /** N11 — audit log: reservation_reserved/confirmed/released/finished/expired; không ghi secret. */
     private static final Logger log = LoggerFactory.getLogger(ReservationService.class);
 
+    /** T11-2 (F09): commandVersion chỉ được tăng tối đa MAX_VERSION_STEP mỗi bước —
+     * chặn INT_MAX làm reservation không xử lý tiếp được (chốt contract §4.2). */
+    static final int MAX_VERSION_STEP = 1000;
+
     private final DriverRepository driverRepo;
     private final ReservationRepository reservationRepo;
     private final ObjectMapper json;
     private final long heartbeatStaleAfterMs;
+    private final long offerTtlMaxMs;
 
     public ReservationService(DriverRepository driverRepo,
                              ReservationRepository reservationRepo,
                              ObjectMapper json,
-                             @Value("${driver.heartbeat-stale-after-ms:15000}") long heartbeatStaleAfterMs) {
+                             @Value("${driver.heartbeat-stale-after-ms:15000}") long heartbeatStaleAfterMs,
+                             @Value("${reservation.offer-ttl-max-ms:120000}") long offerTtlMaxMs) {
         this.driverRepo = driverRepo;
         this.reservationRepo = reservationRepo;
         this.json = json;
         this.heartbeatStaleAfterMs = heartbeatStaleAfterMs;
+        this.offerTtlMaxMs = offerTtlMaxMs;
     }
 
     /**
@@ -97,12 +104,22 @@ public class ReservationService {
             }
         }
 
+        // T10-2 (F10/N29): expiresAt phải nằm trong (now, now + OFFER_TTL_MAX] — chặn offer đã qua
+        // hoặc RESERVED gần như vĩnh viễn. Cùng nguồn đồng hồ với worker (T10-4). Chỉ kiểm tra khi
+        // chưa có row: replay command cũ trả response đã lưu theo contract §4.1.
+        if (existing.isEmpty()) {
+            Instant dbNow = reservationRepo.dbNow();
+            if (!cmd.expiresAt().isAfter(dbNow) || cmd.expiresAt().isAfter(dbNow.plusMillis(offerTtlMaxMs))) {
+                throw new InvalidInputException(
+                        "expiresAt must be in (now, now + offer-ttl-max] (" + offerTtlMaxMs + " ms).");
+            }
+        }
+
         checkVersion(reservationId, cmd.commandVersion(), existing.orElse(null));
         if (existing.isPresent()) {
             throw conflict(existing.get(), "Reservation already exists; use a lifecycle command.");
         }
 
-        Instant heartbeatCutoff = Instant.now().minusMillis(heartbeatStaleAfterMs);
         try {
             reservationRepo.insertReserved(reservationId, cmd.tripId(), cmd.driverId(), cmd.attempt(),
                     cmd.expiresAt(), (int) cmd.commandVersion(),
@@ -110,7 +127,11 @@ public class ReservationService {
                     cmd.destination().latitude(), cmd.destination().longitude(),
                     cmd.distanceM(), cmd.fareVnd());
         } catch (DataIntegrityViolationException e) {
-            // unique(trip_id, attempt): trip+attempt này đã có reservation — driver không thể nhận thêm.
+            // T10-3 (F12): chỉ unique(trip_id, attempt) (SQLState 23505 + đúng constraint)
+            // mới là "trip+attempt đã có reservation"; lỗi dữ liệu khác ném tiếp (400/500).
+            if (!isTripAttemptUniqueViolation(e)) {
+                throw e;
+            }
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("tripId", cmd.tripId().toString());
             details.put("attempt", cmd.attempt());
@@ -118,7 +139,9 @@ public class ReservationService {
                     "A reservation for this trip and attempt already exists.", details);
         }
 
-        int updated = reservationRepo.casReserveDriver(cmd.driverId(), reservationId, heartbeatCutoff);
+        // T10-1 (F06): cutoff heartbeat đánh giá trong SQL sau khi có khóa row (T10-4: clock_timestamp()).
+        int updated = reservationRepo.casReserveDriver(cmd.driverId(), reservationId,
+                heartbeatStaleAfterMs / 1000.0);
         if (updated != 1) {
             // Exception -> Spring rollback cả INSERT reservation; báo state thực của driver.
             Map<String, Object> details = new LinkedHashMap<>();
@@ -155,8 +178,9 @@ public class ReservationService {
                 throw conflict(row, "Confirm requires the matching, unexpired RESERVED offer.");
             }
             // A heartbeat may hold this row across the deadline. Check time after acquiring it.
+            // T10-4 (R04): so sánh hạn dùng clock_timestamp() của DB, không Instant.now() JVM.
             reservationRepo.lockDriver(row.driverId());
-            if (!row.expiresAt().isAfter(Instant.now())) {
+            if (!row.expiresAt().isAfter(reservationRepo.dbNow())) {
                 throw conflict(row, "Offer expired while confirmation was waiting for the driver.");
             }
             if (reservationRepo.confirmDriver(row.driverId(), id, row.tripId()) != 1) {
@@ -188,6 +212,11 @@ public class ReservationService {
                 audit("reservation_released", id, row.tripId(),
                         "reason=" + cmd.reason() + " (already terminal " + row.state() + ")");
                 return response(id, row.state());
+            }
+            // T11-3 (N30): release reservation CONFIRMED chỉ chấp nhận reason CANCELLED
+            // (bù trừ); REJECTED/OFFER_EXPIRED trên CONFIRMED -> 409 STATE_CONFLICT.
+            if ("CONFIRMED".equals(row.state()) && !"CANCELLED".equals(cmd.reason())) {
+                throw conflict(row, "Release of a CONFIRMED reservation requires reason CANCELLED.");
             }
             reservationRepo.releaseDriver(row);
             reservationRepo.transition(id, "RELEASED", cmd.reason(), (int) cmd.commandVersion());
@@ -223,6 +252,25 @@ public class ReservationService {
         if (row != null && reservationRepo.expireReserved(id) == 1) {
             reservationRepo.releaseDriver(row);
             // N11: expiry worker log từng reservation đã expire.
+            audit("reservation_expired", id, row.tripId(), "driverId=" + row.driverId());
+        }
+    }
+
+    /**
+     * T11-1 (F08): phiên bản cho expiry worker — pg_try_advisory_xact_lock: item đang bị giữ
+     * bởi transaction khác được BỎ QUA (không chặn hàng đợi); SET LOCAL lock_timeout giới hạn
+     * thời gian chờ khóa row. Mỗi item là một transaction riêng -> lỗi của item này không
+     * ảnh hưởng item khác.
+     */
+    @Transactional
+    public void expireIfUnlocked(UUID id) {
+        reservationRepo.setLocalLockTimeout("2s");
+        if (!reservationRepo.tryLockReservation(id)) {
+            return; // đang bị giữ — chu kỳ sau sẽ xử lý lại
+        }
+        var row = reservationRepo.findById(id).orElse(null);
+        if (row != null && reservationRepo.expireReserved(id) == 1) {
+            reservationRepo.releaseDriver(row);
             audit("reservation_expired", id, row.tripId(), "driverId=" + row.driverId());
         }
     }
@@ -268,6 +316,12 @@ public class ReservationService {
             throw new StaleVersionException("commandVersion must exceed last_command_version.",
                     Map.of("reservationId", id.toString(), "receivedCommandVersion", version, "storedLastCommandVersion", stored));
         }
+        // T11-2 (F09): chặn command đẩy reservation chưa terminal lên INT_MAX
+        // (sau đó không còn version hợp lệ cho release/finish).
+        if (version > stored + MAX_VERSION_STEP) {
+            throw new InvalidInputException(
+                    "commandVersion must not exceed last_command_version by more than " + MAX_VERSION_STEP + ".");
+        }
     }
 
     private boolean terminal(ReservationRepository.ReservationRow row) {
@@ -296,6 +350,8 @@ public class ReservationService {
                 || cmd.pickup() == null || cmd.destination() == null) {
             throw new InvalidInputException("Reserve command is missing required fields.");
         }
+        // T10-2 (F10/N29): kiểm tra khoảng expiresAt nằm trong doReserve() — chỉ áp dụng cho
+        // reservation MỚI; replay command cũ phải trả response đã lưu theo contract §4.1.
         validateCoordinates(cmd.pickup().latitude(), cmd.pickup().longitude());
         validateCoordinates(cmd.destination().latitude(), cmd.destination().longitude());
         if (cmd.distanceM() < 0 || cmd.fareVnd() <= 0) {
@@ -317,17 +373,41 @@ public class ReservationService {
      * operation + reservation ID before storing/comparing processed_commands.request_hash.
      */
     static String requestHash(ReserveRequest cmd) {
+        // T10-5 (R01): canonical double — -0.0 chuẩn hóa thành 0.0 trước khi băm
+        // (chốt contract §4.1); các giá trị khác giữ đúng Double.toString để hash cũ vẫn ổn định.
         String canonical = "attempt=" + cmd.attempt()
                 + "|distanceM=" + cmd.distanceM()
                 + "|driverId=" + cmd.driverId()
                 + "|expiresAt=" + cmd.expiresAt().toString()
                 + "|fareVnd=" + cmd.fareVnd()
-                + "|pickupLat=" + cmd.pickup().latitude()
-                + "|pickupLng=" + cmd.pickup().longitude()
-                + "|destLat=" + cmd.destination().latitude()
-                + "|destLng=" + cmd.destination().longitude()
+                + "|pickupLat=" + canonicalDouble(cmd.pickup().latitude())
+                + "|pickupLng=" + canonicalDouble(cmd.pickup().longitude())
+                + "|destLat=" + canonicalDouble(cmd.destination().latitude())
+                + "|destLng=" + canonicalDouble(cmd.destination().longitude())
                 + "|tripId=" + cmd.tripId();
         return CommandHash.sha256(canonical);
+    }
+
+    /** Canonical double cho hash (T10-5/T12-4): -0.0 -> 0.0; các giá trị khác giữ Double.toString. */
+    static String canonicalDouble(double value) {
+        return value == 0.0 ? "0.0" : Double.toString(value);
+    }
+
+    /** T10-3 (F12): đúng unique index uq_reservations_trip_attempt (SQLState 23505).
+     * DataIntegrityViolationException không có getSQLState() — dò SQLException trong cause chain. */
+    private static boolean isTripAttemptUniqueViolation(DataIntegrityViolationException e) {
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        if (!msg.contains("uq_reservations_trip_attempt")) {
+            return false;
+        }
+        Throwable cause = e.getCause();
+        while (cause != null) {
+            if (cause instanceof java.sql.SQLException sqlEx && "23505".equals(sqlEx.getSQLState())) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     private ReserveOutcome parseStoredResponse(String storedJson) {

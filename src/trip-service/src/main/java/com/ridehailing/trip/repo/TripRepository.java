@@ -26,13 +26,17 @@ public class TripRepository {
         this.jdbc = jdbc;
     }
 
-    /** INSERT trip mới (state SEARCHING, attempt 1, version 1). Id sinh phía Java. */
+    /** INSERT trip mới (state SEARCHING, attempt 1, version 1). Id sinh phía Java.
+     * T12-1 (F14): created_at ghi tường minh từ caller — một timestamp duy nhất cho
+     * response/replay/outbox và DB. */
     public UUID insert(UUID id, UUID passengerId, double pickupLat, double pickupLng,
-                       double destinationLat, double destinationLng, long distanceM, long fareVnd) {
+                       double destinationLat, double destinationLng, long distanceM, long fareVnd,
+                       Instant createdAt) {
         jdbc.update("INSERT INTO trips (id, passenger_id, pickup_lat, pickup_lng, "
-                        + "destination_lat, destination_lng, distance_m, fare_vnd, state, matching_attempt, version)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SEARCHING', 1, 1)",
-                id, passengerId, pickupLat, pickupLng, destinationLat, destinationLng, distanceM, fareVnd);
+                        + "destination_lat, destination_lng, distance_m, fare_vnd, state, matching_attempt, version, created_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SEARCHING', 1, 1, ?)",
+                id, passengerId, pickupLat, pickupLng, destinationLat, destinationLng, distanceM, fareVnd,
+                Timestamp.from(createdAt));
         return id;
     }
 

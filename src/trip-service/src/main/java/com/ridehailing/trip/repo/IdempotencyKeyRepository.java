@@ -45,6 +45,13 @@ public class IdempotencyKeyRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    /** T12-3 (N32 trip): dọn idempotency key cũ hơn N giờ (batch hữu hạn 1000 row/chu kỳ). */
+    public int deleteOldKeys(int hours) {
+        return jdbc.update(
+                "DELETE FROM idempotency_keys WHERE created_at < clock_timestamp() - make_interval(hours => ?) LIMIT 1000",
+                hours);
+    }
+
     /** stored_response JSONB = {"status":<int>,"body":{...}} (chốt T10, áp dụng lại ở đây). */
     private int readStatus(String jsonText) {
         try {

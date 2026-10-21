@@ -39,9 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * dùng H2 in-memory (flyway tắt, không bảng nào được tạo; probe không chạm DB).
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                "server.port=18098",
                 // Flyway không auto-configure trong Boot 4; bean custom FlywayConfig
                 // tắt bằng app.flyway.enabled=false.
                 "spring.datasource.url=jdbc:h2:mem:driver_probe;DB_CLOSE_DELAY=-1",
@@ -79,13 +78,16 @@ class SecurityProbeTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18098";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body) {
     }
 
     private Resp get(String path, String bearerToken, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).GET();
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path)).GET();
         if (bearerToken != null) {
             req.header("Authorization", "Bearer " + bearerToken);
         }
@@ -97,7 +99,7 @@ class SecurityProbeTest {
     }
 
     private Resp put(String path, String internalTokenHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .PUT(HttpRequest.BodyPublishers.noBody())
                 .header("Content-Type", "application/json");
         if (internalTokenHeader != null) {
@@ -243,7 +245,7 @@ class SecurityProbeTest {
     }
 
     private Resp putJson(String path, Object body, String internalTokenHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(
                         JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8)))
                 .header("Content-Type", "application/json");
@@ -255,7 +257,7 @@ class SecurityProbeTest {
     }
 
     private Resp delete(String path, String bearerToken, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).DELETE();
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path)).DELETE();
         if (bearerToken != null) {
             req.header("Authorization", "Bearer " + bearerToken);
         }
@@ -397,7 +399,7 @@ class SecurityProbeTest {
     void wrongContentTypeReturns415() throws Exception {
         String correlation = UUID.randomUUID().toString();
         HttpRequest req = HttpRequest.newBuilder(
-                        URI.create(BASE + "/internal/reservations/" + UUID.randomUUID()))
+                        URI.create(base() + "/internal/reservations/" + UUID.randomUUID()))
                 .PUT(HttpRequest.BodyPublishers.ofString("not-json"))
                 .header("Content-Type", "text/plain")
                 .header("X-Internal-Token", INTERNAL_TOKEN)

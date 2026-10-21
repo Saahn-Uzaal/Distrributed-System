@@ -18,10 +18,10 @@ Trạng thái: `TODO` | `IN_PROGRESS` | `BLOCKED` | `DONE`
 | T10 — Giữ chỗ nguyên tử (atomic reserve) | B | DONE | T09 | docs/tasks/T10.md (41 tests driver-service pass: 13 reserve integration + 14 profile + 11 probe + 3 log; full repo 86/0; live probe :8081/:8082 + replay/conflict/tombstone) | – |
 | T11 — Confirm/release/finish | B | DONE | T10 | docs/tasks/T11.md (17 lifecycle HTTP tests + restart recovery; Driver 67/0, full repo 130/0; tombstone/version/fencing/expiry và nâng cấp giữ replay) | – |
 | T12 — Quote và tạo trip | A | DONE | T03, T05, T07 | docs/tasks/T12.md (25 tests trip-service pass: 11 integration Testcontainers PG + 14 probe/log; full repo 97/0; live probe nginx :8080 quote/create/replay/mismatch/list/get + outbox pending verify) | – |
-| T13 — Outbox publisher Trip | A | TODO | T04, T12 | – | F01+N10; N15, N21, N22, N23, N24, F31 (FIX_LIST_T01-T12) |
-| T14 — Consumer inbox và retry | B | TODO | T04, T05, T07 | – | F01+N10; N15, N23 (FIX_LIST_T01-T12) |
+| T13 — Outbox publisher Trip | A | TODO | T04, T12 | – | FIX_LIST_T01-T12 còn lại: phase 6 infra/scripts; phase 7 frontend/nginx; phase 8 P3s |
+| T14 — Consumer inbox và retry | B | TODO | T04, T05, T07 | – | FIX_LIST_T01-T12 còn lại: phase 6 infra/scripts; phase 7 frontend/nginx; phase 8 P3s |
 | T15 — Matching job thật | B | TODO | T09, T13, T14 | – | – |
-| T16 — Trip nhận proposal và reserve | A | TODO | T11, T12, T13, T14, T15 | – | F01+N10; N21, N22, N24, F31 (FIX_LIST_T01-T12) |
+| T16 — Trip nhận proposal và reserve | A | TODO | T11, T12, T13, T14, T15 | – | FIX_LIST_T01-T12 còn lại: phase 6 infra/scripts; phase 7 frontend/nginx; phase 8 P3s |
 | T17 — Driver đọc offer | B | TODO | T11, T16 | – | – |
 | T18 — Accept chuyến | A | TODO | T16, T17 | – | – |
 | T19 — Reject và tìm lại | A | TODO | T18 | – | – |
@@ -80,3 +80,6 @@ T12 DONE: trip-service có migrations V2 (`trips` + `outbox` + `trip_events` + `
 ## Sửa review T09/T10/T12 và hoàn tất T11 (2026-10-20)
 
 Đã sửa R01–R07: Trip idempotency theo principal/operation/key, driver profile/identity tách biệt, phân trang long; Driver claim command nguyên tử, hash bind operation/resource, profile retry đồng thời, version bounds. T11 DONE: confirm/release/finish, tombstone thật, fencing hai pointer, expiry RESERVED có worker bền vững và kiểm tra deadline sau khóa driver. Migrations mới Driver V4/Trip V3 có test nâng cấp giữ replay cũ. Full repo clean verify **130 tests/0 failures/errors/skipped**; web 13/13 + build pass. Chi tiết mới nhất: `docs/T09-T12_REVIEW_FIXES.md`, `docs/tasks/T11.md`. Các ghi chú T09/T10/T12 phía trên là lịch sử, áp dụng các chốt sửa mới trong contract. T13/T14/T15 vẫn TODO; không tự triển khai task kế tiếp.
+
+## Ghi chú đợt sửa FIX_LIST T01–T12 (2026-10-21) — phase 1–5 xong
+Đợt rà soát [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md) (82 mục) đã hoàn thành **phase 1–5**: C01–C03; T07 security + nginx T08-1/2; contract T05 (N15/N21–N24/F31); T07 logging F20/F21/N11/N12/N13 (+Q02); **T09–T12 correctness/time** (một nguồn đồng hồ DB `clock_timestamp()`, TTL window `(now, now+OFFER_TTL_MAX]`, version cap `MAX_VERSION_STEP=1000`, canonical hash -0.0→"0.0", Haversine clamp, candidates bounding box, plate normalization + unique index, expiry worker advisory lock + cô lập lỗi, outbox envelope + REPEATABLE_READ list, RANDOM_PORT tests, cleanup workers). Migrations mới: Driver V5 (`drivers.version`, `vehicles.updated_at`, `uq_vehicles_plate_upper`), Trip V4 (outbox envelope, `trips.reservation_id`, unique `trip_events(trip_id,type,version)`). Full repo `clean verify` **194 tests / 0 failures**. Còn lại: phase 6 infra/scripts, phase 7 frontend + nginx, phase 8 P3 còn lại (gồm T12-6 sau khi chốt T05-10). Chi tiết: `docs/FIX_LIST_T01-T12.md` + `docs/progress.md`. **Trạng thái các task trong bảng trên không đổi** — đây là đợt sửa, không phải task mới.

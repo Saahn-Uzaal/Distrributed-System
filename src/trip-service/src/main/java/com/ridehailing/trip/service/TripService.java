@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
@@ -97,14 +98,17 @@ public class TripService {
         Map<String, Object> fareFields = fare(distanceM);
 
         String hash = requestHash(req);
-        Instant createdAt = Instant.now();
+        // T12-1 (F14): MỘT timestamp duy nhất, truncate về giây để round-trip qua DB
+        // (TIMESTAMPTZ microsecond) giữ nguyên chuỗi ISO — response, GET, replay và
+        // outbox.occurred_at đều dùng đúng giá trị này.
+        Instant createdAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         UUID tripId = UUID.randomUUID();
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("tripId", tripId.toString());
         body.put("state", "SEARCHING");
         body.put("matchingAttempt", 1);
-        body.put("createdAt", createdAt.truncatedTo(ChronoUnit.SECONDS));
+        body.put("createdAt", createdAt);
         String storedJson = "{\"status\":202,\"body\":" + writeJson(body) + "}";
 
         int claimed = idempotencyRepo.claim(user.userId(), CREATE_TRIP_OPERATION, key, hash, storedJson);
@@ -121,17 +125,21 @@ public class TripService {
                     "Idempotency-Key was already used with a different payload.", details);
         }
 
+        // T12-1 (F14): MỘT timestamp duy nhất — ghi tường minh vào trips.created_at và dùng
+        // cho response + replay stored + outbox.occurred_at.
         tripRepo.insert(tripId, user.userId(), req.pickup().latitude(), req.pickup().longitude(),
                 req.destination().latitude(), req.destination().longitude(), distanceM,
-                ((Number) fareFields.get("fareVnd")).longValue());
+                ((Number) fareFields.get("fareVnd")).longValue(), createdAt);
 
         // Ý định yêu cầu matching: outbox PENDING TripRequested attempt 1 (events.md §3.1).
+        // T12-2 (N33): aggregate_version = trips.version lúc ghi (= 1), routing_key = trip.requested.
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tripId", tripId.toString());
         payload.put("attempt", 1);
         payload.put("pickup", pointJson(req.pickup()));
         payload.put("excludedDriverIds", List.of());
-        outboxRepo.insertPending(UUID.randomUUID(), "TripRequested", tripId, writeJson(payload), correlationId, createdAt);
+        outboxRepo.insertPending(UUID.randomUUID(), "TripRequested", tripId, writeJson(payload), correlationId,
+                createdAt, 1, "trip.requested");
 
         // Trip event history (contract §3.5): transition đầu – -> SEARCHING.
         eventRepo.insert(tripId, "TRIP_CREATED", 1, user.userId(), "Trip created in SEARCHING");
@@ -145,7 +153,9 @@ public class TripService {
         return new CreateOutcome(202, body);
     }
 
-    /** GET /api/trips — phân trang §1.3; passenger thấy chuyến của mình, driver thấy chuyến đã assign. */
+    /** GET /api/trips — phân trang §1.3; passenger thấy chuyến của mình, driver thấy chuyến đã assign.
+     * T12-5 (R02): REPEATABLE_READ để count và content đọc cùng một snapshot DB. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Map<String, Object> list(AuthenticatedUser user, int page, int size) {
         if (page < 0 || size < 1) {
             throw new InvalidInputException("page must be >= 0 and size must be >= 1.");
@@ -204,12 +214,13 @@ public class TripService {
         }
     }
 
-    /** request_hash (chốt T12): SHA-256 hex của payload nghiệp vụ canonical — chỉ tọa độ pickup/destination. */
+    /** request_hash (chốt T12): SHA-256 hex của payload nghiệp vụ canonical — chỉ tọa độ pickup/destination.
+     * T12-4 (R01): canonical double — -0.0 chuẩn hóa thành 0.0 trước khi băm (contract §3.3). */
     static String requestHash(QuoteRequest req) {
-        String canonical = "destLat=" + req.destination().latitude()
-                + "|destLng=" + req.destination().longitude()
-                + "|pickupLat=" + req.pickup().latitude()
-                + "|pickupLng=" + req.pickup().longitude();
+        String canonical = "destLat=" + canonicalDouble(req.destination().latitude())
+                + "|destLng=" + canonicalDouble(req.destination().longitude())
+                + "|pickupLat=" + canonicalDouble(req.pickup().latitude())
+                + "|pickupLng=" + canonicalDouble(req.pickup().longitude());
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest(canonical.getBytes(StandardCharsets.UTF_8));
@@ -221,6 +232,11 @@ public class TripService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable.", e);
         }
+    }
+
+    /** Canonical double cho hash (T10-5/T12-4): -0.0 -> 0.0; các giá trị khác giữ Double.toString. */
+    static String canonicalDouble(double value) {
+        return value == 0.0 ? "0.0" : Double.toString(value);
     }
 
     private CreateOutcome parseStoredResponse(IdempotencyKeyRepository.Stored stored) {

@@ -44,8 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *  + STALE_VERSION, DRIVER_NOT_AVAILABLE (OFFLINE/heartbeat stale), TOMBSTONED_RESERVATION.
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
-        properties = "server.port=18100")
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 @Testcontainers
 class ReserveIntegrationTest {
@@ -91,7 +90,10 @@ class ReserveIntegrationTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18100";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body) {
     }
@@ -107,7 +109,7 @@ class ReserveIntegrationTest {
     // --- helpers HTTP/DB ---
 
     private Resp send(String method, String path, String internalToken, String jsonBody) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path));
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path));
         switch (method) {
             case "GET" -> req.GET();
             case "PUT" -> req.PUT(HttpRequest.BodyPublishers.ofString(jsonBody == null ? "" : jsonBody));
@@ -505,6 +507,23 @@ class ReserveIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT status FROM drivers WHERE id=?",String.class,driver)).isEqualTo("AVAILABLE");
     }
 
+    /** T10-2/T10-3 (F10/N29): expiresAt phải nằm trong (now, now + OFFER_TTL_MAX] -> ngược lại 400. */
+    @org.junit.jupiter.api.Test
+    void reserveRejectsExpiresOutsideOfferTtlWindow() throws Exception {
+        UUID driver = seedDriver(UUID.randomUUID(), "AVAILABLE", Instant.now(),10.7,106.7);
+        // Đã qua hạn.
+        Resp past=reserve(UUID.randomUUID(),UUID.randomUUID(),1,UUID.randomUUID(),driver,1,Instant.now().minusSeconds(30),32000);
+        assertThat(past.status()).isEqualTo(400);
+        assertThat(past.body().get("code")).isEqualTo("INVALID_INPUT");
+        // Vượt OFFER_TTL_MAX mặc định 120 s.
+        Resp tooFar=reserve(UUID.randomUUID(),UUID.randomUUID(),1,UUID.randomUUID(),driver,1,Instant.now().plusSeconds(3600),32000);
+        assertThat(tooFar.status()).isEqualTo(400);
+        // Ngày xa tương lai (parse được bằng Instant; vẫn > now + OFFER_TTL_MAX).
+        Resp farFuture=reserve(UUID.randomUUID(),UUID.randomUUID(),1,UUID.randomUUID(),driver,1,Instant.parse("9999-12-31T23:59:59Z"),32000);
+        assertThat(farFuture.status()).isEqualTo(400);
+        assertThat(countReservations()).isZero();
+    }
+
     @org.junit.jupiter.api.Test
     void reviewConcurrentSameCommandMustReplay() throws Exception {
         UUID driver=seedDriver(UUID.randomUUID(),"AVAILABLE",Instant.now(),10.7,106.7);
@@ -554,9 +573,9 @@ class ReserveIntegrationTest {
             legacy.update("INSERT INTO processed_commands(command_id,request_hash,stored_response) VALUES (?,?,?::jsonb)",cmd,oldHash,stored);
             var flyway=org.flywaydb.core.Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load();
             flyway.migrate();
-            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("4");
+            assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("5");
             var repo=new com.ridehailing.driver.repo.ReservationRepository(legacy);
-            var service=new com.ridehailing.driver.service.ReservationService(new com.ridehailing.driver.repo.DriverRepository(legacy),repo,JSON,15000);
+            var service=new com.ridehailing.driver.service.ReservationService(new com.ridehailing.driver.repo.DriverRepository(legacy),repo,JSON,15000L,120000L);
             var request=new com.ridehailing.driver.web.dto.ReserveRequest(cmd,1,trip,driver,1,expires,
                     new com.ridehailing.driver.web.dto.ReserveRequest.GeoPoint(10.7769,106.7009),new com.ridehailing.driver.web.dto.ReserveRequest.GeoPoint(10.8,10.72),3316,32000);
             var tx=new org.springframework.transaction.support.TransactionTemplate(new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource));
@@ -597,15 +616,18 @@ class ReserveIntegrationTest {
     }
 
 
+    /** T11-2 (F09): commandVersion vượt quá last+MAX_VERSION_STEP (1000) -> 400 INVALID_INPUT,
+     * không tạo reservation, driver giữ AVAILABLE. */
     @org.junit.jupiter.api.Test
-    void maxIntCommandVersionIsStoredAndReadWithoutTruncation() throws Exception {
+    void reserveWithHugeCommandVersionIsRejected() throws Exception {
         UUID driver=seedDriver(UUID.randomUUID(),"AVAILABLE",Instant.now(),10.7,106.7),r=UUID.randomUUID();
         Resp created=reserve(r,UUID.randomUUID(),Integer.MAX_VALUE,UUID.randomUUID(),driver,1,Instant.now().plusSeconds(30),32000);
-        assertThat(created.status()).isEqualTo(201);
-        assertThat(((Number)created.body().get("version")).longValue()).isEqualTo(2147483647L);
+        assertThat(created.status()).isEqualTo(400);
+        assertThat(created.body().get("code")).isEqualTo("INVALID_INPUT");
         Resp read=send("GET","/internal/reservations/"+r,INTERNAL_TOKEN,null);
-        assertThat(((Number)read.body().get("version")).longValue()).isEqualTo(2147483647L);
-        assertThat(jdbc.queryForObject("SELECT last_command_version FROM reservations WHERE id=?",Long.class,r)).isEqualTo(2147483647L);
+        assertThat(read.status()).isEqualTo(404);
+        assertThat(countReservations()).isZero();
+        assertThat(jdbc.queryForObject("SELECT status FROM drivers WHERE id=?",String.class,driver)).isEqualTo("AVAILABLE");
     }
 
 }

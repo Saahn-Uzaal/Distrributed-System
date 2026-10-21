@@ -38,9 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * dùng H2 in-memory (flyway tắt, không bảng nào được tạo; probe không chạm DB).
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                "server.port=18099",
                 // Flyway không auto-configure trong Boot 4; bean custom FlywayConfig
                 // tắt bằng app.flyway.enabled=false.
                 "spring.datasource.url=jdbc:h2:mem:trip_probe;DB_CLOSE_DELAY=-1",
@@ -76,13 +75,16 @@ class SecurityProbeTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18099";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body) {
     }
 
     private Resp get(String path, String bearerToken, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).GET();
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path)).GET();
         if (bearerToken != null) {
             req.header("Authorization", "Bearer " + bearerToken);
         }
@@ -94,7 +96,7 @@ class SecurityProbeTest {
     }
 
     private Resp post(String path, Object body, String bearerToken, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(
                         JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8)));
@@ -245,7 +247,7 @@ class SecurityProbeTest {
     }
 
     private Resp delete(String path, String bearerToken, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).DELETE();
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path)).DELETE();
         if (bearerToken != null) {
             req.header("Authorization", "Bearer " + bearerToken);
         }
@@ -257,7 +259,7 @@ class SecurityProbeTest {
     }
 
     private Resp postText(String path, String rawBody, String bearerToken, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .POST(HttpRequest.BodyPublishers.ofString(rawBody))
                 .header("Content-Type", "text/plain");
         if (bearerToken != null) {

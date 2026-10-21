@@ -20,13 +20,16 @@ public class OutboxRepository {
     }
 
     /** Ghi row PENDING. payloadJson phải là JSON hợp lệ — bind explicit {@code ?::jsonb}
-     * (pgjdbc bind String thành varchar, không suy ra jsonb). */
+     * (pgjdbc bind String thành varchar, không suy ra jsonb).
+     * T12-2 (N33): ghi thêm aggregate_version (chụp trips.version lúc ghi) + routing_key
+     * cho envelope/retry; schema_version/producer cố định ở producer. */
     public void insertPending(UUID eventId, String eventType, UUID aggregateId, String payloadJson,
-                             UUID correlationId, Instant occurredAt) {
+                             UUID correlationId, Instant occurredAt, int aggregateVersion, String routingKey) {
         jdbc.update("INSERT INTO outbox (id, event_type, aggregate_id, payload, correlation_id,"
-                        + " causation_id, occurred_at, status)"
-                        + " VALUES (?, ?, ?, ?::jsonb, ?, NULL, ?, 'PENDING')",
-                eventId, eventType, aggregateId, payloadJson, correlationId, new java.sql.Timestamp(occurredAt.toEpochMilli()));
+                        + " causation_id, occurred_at, status, aggregate_version, schema_version, producer, routing_key)"
+                        + " VALUES (?, ?, ?, ?::jsonb, ?, NULL, ?, 'PENDING', ?, 'v1', 'trip-service', ?)",
+                eventId, eventType, aggregateId, payloadJson, correlationId,
+                new java.sql.Timestamp(occurredAt.toEpochMilli()), aggregateVersion, routingKey);
     }
 
     public int countPending() {

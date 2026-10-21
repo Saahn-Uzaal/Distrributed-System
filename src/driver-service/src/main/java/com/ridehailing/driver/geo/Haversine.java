@@ -19,7 +19,13 @@ public final class Haversine {
         double dLambda = Math.toRadians(lng2 - lng1);
         double a = Math.sin(dPhi / 2) * Math.sin(dPhi / 2)
                 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) * Math.sin(dLambda / 2);
+        // T09-2 (F11): clamp a vào [0, 1] trước atan2 — điểm đối cực cho a = 1 đúng
+        // (pi/2*2 -> pi*R), không phải 0 m; sai số float có thể đẩy a ra ngoài miền.
+        a = Math.min(1.0, Math.max(0.0, a));
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (!Double.isFinite(c)) {
+            throw new IllegalArgumentException("haversine result is not finite for the given coordinates");
+        }
         return Math.round(EARTH_RADIUS_M * c);
     }
 }

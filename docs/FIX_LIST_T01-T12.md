@@ -403,122 +403,142 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
 
 ## T09 — Driver profile, availability, location, candidates
 
-- [ ] **T09-1 — F07 (P2): `lastSeenAt` lấy trước UPDATE có thể bị chặn**
+- [x] **T09-1 — F07 (P2): `lastSeenAt` lấy trước UPDATE có thể bị chặn**
   - Vị trí: `driver-service/.../service/DriverService.java:88,107`; `repo/DriverRepository.java:94,102`.
   - Sửa: để DB tự gán thời gian sau khi giành được khóa (`SET last_seen_at = clock_timestamp() ... RETURNING last_seen_at`) và trả giá trị đó; dùng `GREATEST(last_seen_at, clock_timestamp())` để timestamp không bị lùi. Dùng cùng một nguồn đồng hồ với cutoff (T10-1, R04).
   - Kiểm chứng: test giữ khóa row 750 ms với ngưỡng 500 ms → `lastSeenAt` trả về mới và driver vẫn có trong candidates ngay sau đó.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `DriverRepository.updateLocation/updateAvailabilityIfFree` gán `SET last_seen_at = GREATEST(last_seen_at, clock_timestamp()) ... RETURNING last_seen_at`; test `HeartbeatClockIntegrationTest.locationWaitingOnRowLockGetsFreshDbClockTimestamp` (giữ row lock 750 ms, ngưỡng 500 ms → lastSeenAt fresh theo DB clock, driver vẫn trong candidates).
 
-- [ ] **T09-2 — F11 (P2): Haversine không clamp → điểm đối cực ra 0 m**
+- [x] **T09-2 — F11 (P2): Haversine không clamp → điểm đối cực ra 0 m**
   - Vị trí: `driver-service/.../geo/Haversine.java:20–24`; `trip-service/.../geo/Haversine.java:20–24` (bản sao).
   - Sửa: `a = Math.min(1.0, Math.max(0.0, a))` trước `atan2`; nếu kết quả không hữu hạn thì ném lỗi.
   - Kiểm chứng: test với (89.846…, 14.397…) và (−89.846…, −165.602…) → khoảng 20 015 114 m, ở cả hai service.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): clamp `a` về [0,1] trước `atan2`, ném lỗi nếu kết quả không hữu hạn; `HaversineTest` ×2 module (driver/trip) — 4 tests mỗi: đối cực đúng = round(π·6371088.8) = 20_015_114 m, gần đối cực ≈ cùng giá trị, trùng điểm = 0, NaN/Inf → IllegalArgumentException.
 
-- [ ] **T09-3 — F13 (P3): Chi tiết lỗi availability dùng snapshot trước CAS**
+- [x] **T09-3 — F13 (P3): Chi tiết lỗi availability dùng snapshot trước CAS**
   - Vị trí: `DriverService.java:86–96`.
   - Sửa: khi CAS thất bại, đọc lại driver (hoặc `UPDATE ... RETURNING`), lấy `tripId` từ `current_trip_id`, hoặc từ reservation của `current_reservation_id` nếu đang RESERVED.
   - Kiểm chứng: driver RESERVED gọi PUT OFFLINE → 409 với `state=RESERVED` và `tripId` khác null.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): khi CAS thất bại đọc lại driver, lấy tripId từ `current_trip_id` hoặc từ reservation của `current_reservation_id`; test `DriverProfileIntegrationTest.offlineConflictResolvesTripIdFromReservationWhenCurrentTripIsNull` → 409 với state=RESERVED và tripId khác null.
 
-- [ ] **T09-4 — N31 (P3): Biển số chưa chuẩn hóa; displayName lưu chưa trim**
+- [x] **T09-4 — N31 (P3): Biển số chưa chuẩn hóa; displayName lưu chưa trim**
   - Vị trí: `DriverService.createProfile` / `validateProfileInput:141–151`.
   - Sửa: chuẩn hóa plate (trim, đổi sang chữ hoa, gộp khoảng trắng) trước khi kiểm tra và lưu; regex cho phép `[A-Z0-9.\- ]`; lưu `displayName` đã trim (như Identity với fullName). Migration chuẩn hóa dữ liệu cũ và unique trên `upper(plate_number)` nếu cần.
   - Kiểm chứng: `51A-123.45` rồi `51a-123.45 ` → lần hai 409 `PLATE_TAKEN`.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `normalizePlate()` (trim, uppercase, gộp khoảng trắng) trước khi kiểm tra và lưu; migration V5 chuẩn hóa dữ liệu cũ + unique index `uq_vehicles_plate_upper` trên `upper(plate_number)`; tests `duplicatePlateReturns409PlateTaken` và `plateNormalizationMakesCaseAndWhitespaceDuplicatesConflict` → 409 PLATE_TAKEN.
 
-- [ ] **T09-5 — R05 (P3): Candidates tải toàn bộ driver AVAILABLE vào Java**
+- [x] **T09-5 — R05 (P3): Candidates tải toàn bộ driver AVAILABLE vào Java**
   - Vị trí: `DriverService.java:124–141`; `DriverRepository.java:109`.
   - Sửa: lọc sơ bộ trong SQL bằng bounding box (lat ± radius/111 km, lng ± …/cos(lat)) + `LIMIT`, sau đó mới tính Haversine trong Java.
   - Kiểm chứng: kết quả giống hệt bản cũ trên bộ dữ liệu test; `EXPLAIN` có dùng index.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `DriverRepository.findCandidatesInBox(lat,lng,radiusM,staleMs,limit)` — bounding box trong SQL + LIMIT rồi mới Haversine trong Java; tests `candidatesExcludeOfflineStaleAndFar` / `candidatesDeterministicOrderAndTieBreak` / `candidatesClampsLimitAndValidatesParams` pass với kết quả như bản cũ.
 
-- [ ] **T09-6 — N32 phần Driver (P3): Thiếu cột theo spec §7**
+- [x] **T09-6 — N32 phần Driver (P3): Thiếu cột theo spec §7**
   - Vị trí: Driver V2/V3.
   - Vấn đề: `drivers` thiếu `version`; `vehicles` thiếu `updated_at`; `processed_commands` không có cơ chế dọn dữ liệu cũ.
   - Sửa: migration V5 thêm các cột (hoặc ghi lý do không thêm vào "lệch đặc tả có chủ đích" của C04, ví dụ fencing bằng pointer thay cho version); job dọn `processed_commands` cũ hơn N ngày.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): migration V5 thêm `drivers.version` (BIGINT NOT NULL DEFAULT 1) và `vehicles.updated_at`; `ProcessedCommandCleanupWorker` mới xóa processed_commands cũ hơn N ngày (gated bởi `app.flyway.enabled`).
 
 ---
 
 ## T10 — Reserve nguyên tử
 
-- [ ] **T10-1 — F06 (P2): Heartbeat cutoff lấy trước khi chờ khóa driver**
+- [x] **T10-1 — F06 (P2): Heartbeat cutoff lấy trước khi chờ khóa driver**
   - Vị trí: `driver-service/.../service/ReservationService.java:99`; `repo/ReservationRepository.java:98`.
   - Sửa: tính cutoff trong chính câu SQL CAS (`last_seen_at > clock_timestamp() - make_interval(secs => ?)`), để PostgreSQL đánh giá lại sau khi có khóa row.
   - Kiểm chứng: test giữ khóa driver vượt ngưỡng heartbeat → reserve trả 409 `DRIVER_NOT_AVAILABLE`.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): cutoff trong chính SQL CAS (`last_seen_at > clock_timestamp() - make_interval(secs => ?)`) đánh giá sau khi có khóa row; test `HeartbeatClockIntegrationTest.reserveWaitingOnRowLockSeesStaleHeartbeatByDbClock` (giữ lock 1200 ms → 409 DRIVER_NOT_AVAILABLE, không có reservation row).
 
-- [ ] **T10-2 — F10 + N29 (P2): `expiresAt` không được kiểm tra phạm vi**
+- [x] **T10-2 — F10 + N29 (P2): `expiresAt` không được kiểm tra phạm vi**
   - Vị trí: `ReservationService.validate:264–275`.
   - Vấn đề: nhận `expiresAt` đã qua (201 rồi chiếm driver) và nhận cả `expiresAt` rất xa (năm 2100 → driver bị RESERVED gần như vĩnh viễn).
   - Sửa: yêu cầu `now < expiresAt ≤ now + OFFER_TTL_MAX` (env, ví dụ 120 s), ngoài khoảng → 400 `INVALID_INPUT`; dùng cùng nguồn đồng hồ với worker.
   - Kiểm chứng: test quá khứ, +1 giờ, +30 s.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): kiểm tra khoảng `(now, now + OFFER_TTL_MAX]` bằng `dbNow()` trong `doReserve()`, chỉ cho reservation MỚI (replay command cũ trả response đã lưu theo contract §4.1); test `reserveRejectsExpiresOutsideOfferTtlWindow` — quá khứ / +1h / 9999-12-31 → 400 INVALID_INPUT, không có row.
 
-- [ ] **T10-3 — F12 (P3): Lỗi dữ liệu bị báo nhầm là trùng trip/attempt**
+- [x] **T10-3 — F12 (P3): Lỗi dữ liệu bị báo nhầm là trùng trip/attempt**
   - Vị trí: `ReservationService.java:106`.
   - Sửa: chỉ trả `DRIVER_NOT_AVAILABLE` khi SQLState là `23505` và tên constraint là `uq_reservations_trip_attempt`; lỗi khác (ví dụ `22008` timestamp ngoài miền) → 400 hoặc ném tiếp. Kết hợp T10-2 sẽ chặn trước được timestamp ngoài miền.
   - Kiểm chứng: `expiresAt="+300000-01-01T00:00:00Z"` → 400.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `isTripAttemptUniqueViolation` chỉ chấp nhận SQLState 23505 trong cause chain + constraint `uq_reservations_trip_attempt`; DataIntegrityViolationException khác ném tiếp (handler → 500). Không có probe HTTP riêng: `validate()` chặn mọi input ngoài miền trước INSERT (T10-2); xác nhận qua full verify.
 
-- [ ] **T10-4 — R04 (P2): Trộn đồng hồ JVM và DB**
+- [x] **T10-4 — R04 (P2): Trộn đồng hồ JVM và DB**
   - Vị trí: `ReservationService.confirm:149` (JVM); `ReservationRepository.expireReserved/findExpiredIds` (DB `now()`); heartbeat (JVM).
   - Sửa: chọn một nguồn duy nhất (khuyến nghị PostgreSQL `clock_timestamp()` cho mọi so sánh hạn) và áp dụng cho T09-1, T10-1, T10-2 và confirm. Lưu ý `now()` là thời điểm **bắt đầu** transaction, nên dùng `clock_timestamp()` khi so sánh sau khi chờ khóa.
   - Kiểm chứng: rà code không còn `Instant.now()` trong các phép so sánh hạn.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): một nguồn đồng hồ duy nhất — `dbNow()`/`clock_timestamp()` cho recheck confirm, `expireReserved/findExpiredIds`, cutoff heartbeat trong SQL; không còn `Instant.now()` trong các phép so sánh hạn (rà code). Kiểm chứng qua `HeartbeatClockIntegrationTest` + `ReservationLifecycleIntegrationTest`.
 
-- [ ] **T10-5 — R01 phần Driver (P3): Hash command coi `0.0` và `-0.0` là khác nhau**
+- [x] **T10-5 — R01 phần Driver (P3): Hash command coi `0.0` và `-0.0` là khác nhau**
   - Vị trí: `ReservationService.requestHash:290–301`.
   - Sửa: chuẩn hóa `-0.0` thành `0.0` (hoặc dùng `BigDecimal.stripTrailingZeros().toPlainString()`) trước khi băm; chốt quy tắc canonical trong contract §4.1. Cùng quyết định với T12-4.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `canonicalDouble()` chuẩn hóa -0.0 → "0.0" trước khi băm; quy tắc canonical chốt trong contract §4.1; unit test `ReservationServiceHashTest` ×3 (-0.0 ≡ 0.0, tọa độ khác → hash khác, giá trị khác 0 giữ đúng Double.toString).
 
 ---
 
 ## T11 — Confirm / release / finish / expiry
 
-- [ ] **T11-1 — F08 (P2): Expiry worker chặn đầu hàng đợi, khóa blocking, không cô lập lỗi**
+- [x] **T11-1 — F08 (P2): Expiry worker chặn đầu hàng đợi, khóa blocking, không cô lập lỗi**
   - Vị trí: `driver-service/.../service/ReservationExpiryWorker.java:22–23`; `ReservationService.expire:204–210`.
   - Vấn đề: một reservation đang bị giữ khóa làm các reservation quá hạn khác (của driver khác) phải chờ; một lỗi ném ra làm dừng cả batch.
   - Sửa: dùng `pg_try_advisory_xact_lock` (bỏ qua item đang bị khóa) hoặc `SELECT … FOR UPDATE SKIP LOCKED`; bọc try/catch cho từng item kèm log (T07-8); `SET LOCAL lock_timeout`.
   - Kiểm chứng: test giữ khóa reservation A → reservation B quá hạn vẫn EXPIRED trong vòng 1–2 chu kỳ; A bị lỗi giả lập → B vẫn được xử lý.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `expireIfUnlocked` dùng `pg_try_advisory_xact_lock` (bỏ qua item đang bị khóa) + `SET LOCAL lock_timeout 2s`; worker try/catch từng item kèm log.error. Tests: `ReservationLifecycleIntegrationTest.expiryWorkerSkipsLockedReservationButExpiresOthers` (giữ advisory lock A → B vẫn EXPIRED trong chu kỳ) và `ReservationExpiryWorkerTest` (cô lập lỗi — a ném, b vẫn được xử lý).
 
-- [ ] **T11-2 — F09 (P2): `commandVersion = INT_MAX` làm reservation không xử lý tiếp được**
+- [x] **T11-2 — F09 (P2): `commandVersion = INT_MAX` làm reservation không xử lý tiếp được**
   - Vị trí: `ReservationService.java:155,214,236`.
   - Vấn đề: confirm với 2147483647 → driver BUSY, sau đó không còn version hợp lệ nào cho release/finish; CONFIRMED lại không tự hết hạn.
   - Sửa: chốt trong contract rằng version chỉ được tăng một bậc mỗi lần, hoặc giới hạn trên `≤ last + 1000`; hoặc không cho command đưa reservation chưa terminal lên `INT_MAX`. Không chỉ đổi kiểu sang BIGINT để dời biên.
   - Kiểm chứng: test confirm với version cực lớn → 400; luồng 1 → 2 → 3 vẫn chạy bình thường.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `checkVersion` chặn `version > stored + MAX_VERSION_STEP(1000)` → 400 INVALID_INPUT (chốt contract §4.1). Tests: `confirmWithHugeVersionIsRejectedButNormalFlowWorks` và `reserveWithHugeCommandVersionIsRejected` (INT_MAX → 400, không row, driver AVAILABLE); luồng 1→2→3 bình thường.
 
-- [ ] **T11-3 — N30 (P3): Release không kiểm tra reason có hợp với state**
+- [x] **T11-3 — N30 (P3): Release không kiểm tra reason có hợp với state**
   - Vị trí: `ReservationService.release:161–182`.
   - Vấn đề: `OFFER_EXPIRED`/`REJECTED` vẫn release được reservation CONFIRMED và giải phóng driver BUSY.
   - Sửa: với state CONFIRMED chỉ chấp nhận reason `CANCELLED` (bù trừ); reason khác → 409 `STATE_CONFLICT`. Cập nhật contract §4.2.
   - Kiểm chứng: test release `OFFER_EXPIRED` trên CONFIRMED → 409, driver vẫn BUSY.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): release trên CONFIRMED chỉ chấp nhận reason CANCELLED; reason khác → 409 STATE_CONFLICT (contract §4.2 đã cập nhật). Test: `offerExpiredReleaseOnConfirmedIsStateConflict` — driver vẫn BUSY.
 
 ---
 
 ## T12 — Quote và tạo trip
 
-- [ ] **T12-1 — F14 (P2): `createdAt` trong response create/replay khác với GET**
+- [x] **T12-1 — F14 (P2): `createdAt` trong response create/replay khác với GET**
   - Vị trí: `trip-service/.../service/TripService.java:94`; `repo/TripRepository.java:32`; migration V2 dòng 24.
   - Sửa: dùng một timestamp duy nhất: INSERT với giá trị tường minh (`created_at = ?`) hoặc `RETURNING created_at`, và dùng giá trị đó cho response, bản lưu replay và `occurred_at` của outbox.
   - Kiểm chứng: test create rồi GET → `createdAt` bằng nhau; replay cũng giống hệt.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): một timestamp duy nhất `Instant.now().truncatedTo(SECONDS)` dùng cho response, bản lưu replay, `trips.created_at` và `outbox.occurred_at`; test `TripIntegrationTest.createdAtIsStableAcrossGetAndReplay` — POST/GET/DB/replay trả cùng giá trị.
 
-- [ ] **T12-2 — N33 (P3): Bảng outbox thiếu field cho envelope và retry**
+- [x] **T12-2 — N33 (P3): Bảng outbox thiếu field cho envelope và retry**
   - Vị trí: `trip-service/.../V2__trips.sql` bảng `outbox`; `OutboxRepository.insertPending`.
   - Sửa: migration thêm `aggregate_version` (chụp `trips.version` lúc ghi — bắt buộc làm ngay vì không suy lại được), `schema_version`, `producer`, `routing_key`, `attempts`, `next_attempt_at`, `last_error`; `insertPending` ghi `aggregate_version = 1` cho TripRequested.
   - Kiểm chứng: test create → outbox có `aggregate_version = 1`, `routing_key = trip.requested`.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): migration V4 thêm `aggregate_version/schema_version/producer/routing_key/attempts/next_attempt_at/last_error` cho outbox; `insertPending` ghi `aggregate_version=1`, `routing_key='trip.requested'`; test `outboxRowCarriesAggregateVersionAndRoutingKey`.
 
-- [ ] **T12-3 — N32 phần Trip (P3): Thiếu cột/ràng buộc theo spec §7**
+- [x] **T12-3 — N32 phần Trip (P3): Thiếu cột/ràng buộc theo spec §7**
   - Vị trí: Trip V2/V3.
   - Vấn đề: `trips` thiếu `reservation_id`; `trip_events.id` là BIGSERIAL (spec yêu cầu UUID) và thiếu unique `(trip_id, type, version)` để chống ghi trùng lịch sử khi retry; `idempotency_keys` không có cơ chế dọn dữ liệu cũ.
   - Sửa: migration V4 thêm `reservation_id`, unique `(trip_id, type, version)`, đổi hoặc ghi lý do giữ BIGSERIAL; job dọn idempotency key cũ (ví dụ > 24 h).
+  - ✅ Đã làm + kiểm chứng (2026-10-21): migration V4 thêm `trips.reservation_id` + unique index `uq_trip_events_trip_type_version` trên `trip_events(trip_id, type, version)`; giữ BIGSERIAL cho `trip_events.id` — lệch đặc tả có chủ đích (id nội bộ history, không phải event identity lộ ra envelope); `IdempotencyKeyCleanupWorker` mới xóa idempotency key cũ > 24 h (gated bởi `app.flyway.enabled`).
 
-- [ ] **T12-4 — R01 (P3): Hash idempotency coi `0.0` và `-0.0` là khác nhau**
+- [x] **T12-4 — R01 (P3): Hash idempotency coi `0.0` và `-0.0` là khác nhau**
   - Vị trí: `TripService.requestHash:196`.
   - Sửa: chuẩn hóa như T10-5; ghi rõ trong contract §3.3.
   - Kiểm chứng: cùng key, latitude 0.0 rồi -0.0 → replay, không phải 409.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `canonicalDouble()` trong `TripService.requestHash` (-0.0 → "0.0"); quy tắc chốt trong contract §3.3; test `negativeZeroLatitudeReplaysInsteadOfMismatch` — cùng key, latitude 0.0 rồi -0.0 → replay 202, không phải 409.
 
-- [ ] **T12-5 — R02 (P3): Count và content của list không cùng snapshot**
+- [x] **T12-5 — R02 (P3): Count và content của list không cùng snapshot**
   - Vị trí: `TripService.list:137–155`.
   - Sửa: đặt `@Transactional(readOnly = true, isolation = REPEATABLE_READ)` cho `list`, hoặc gộp thành một query với `COUNT(*) OVER()`.
   - Kiểm chứng: test tạo chuyến đồng thời trong lúc list → `totalElements` khớp với nội dung trang.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `list()` đặt `@Transactional(readOnly=true, isolation=Isolation.REPEATABLE_READ)` — count và content đọc cùng snapshot; test `listUnderRepeatableReadStaysConsistentWithConcurrentCreates`.
 
 - [ ] **T12-6 — N28 (P3): Không giới hạn số chuyến active của một passenger**
   - Vị trí: `TripService.create:81–134`.
   - Sửa (sau khi chốt T05-10): trong transaction, khóa theo passenger (advisory lock) rồi kiểm tra có chuyến state chưa terminal hay không → 409 `ACTIVE_TRIP_EXISTS`; hoặc dùng partial unique index `(passenger_id) WHERE state IN ('SEARCHING','DRIVER_OFFERED','CANCELLING','ACCEPTED','IN_PROGRESS')`.
   - Kiểm chứng: hai create đồng thời với hai key khác nhau → một 202, một 409; replay cùng key vẫn 202.
 
-- [ ] **T12-7 — N20 (P3): Cổng test cố định trùng nhau giữa các module**
+- [x] **T12-7 — N20 (P3): Cổng test cố định trùng nhau giữa các module**
   - Vị trí: `server.port=18099` (Driver và Trip), `18100` (Driver và Matching), `18101` (Driver và Payment), cùng `18097`, `18098`, `18102`.
   - Sửa: `webEnvironment = RANDOM_PORT` + `@LocalServerPort` để dựng BASE URL; bỏ hằng số `BASE`.
   - Kiểm chứng: `./mvnw -B -T 4 clean verify` pass.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): 9 test classes chuyển sang `RANDOM_PORT` + `@LocalServerPort` (`org.springframework.boot.test.web.server.LocalServerPort` trong Boot 4), bỏ `server.port=...`; full `./mvnw -B clean verify` xanh trên cổng ngẫu nhiên — 194 tests / 0 failures.

@@ -174,6 +174,7 @@ Request:
 #### POST /api/trips (PASSENGER) — bắt buộc header `Idempotency-Key: <UUID>`
 Body giống quote.
 - **Sửa R01:** key được scope theo `(principal_id, operation=CREATE_TRIP, key)`; passenger khác dùng cùng key có namespace riêng, không được replay response của người trước.
+- **Chốt T12-4 (R01):** hash payload idempotency chuẩn hóa double như §4.1: `-0.0` → `"0.0"`, các giá trị khác giữ `Double.toString`; cùng key + latitude `0.0`/`-0.0` là replay 202, không 409 `IDEMPOTENCY_MISMATCH`.
 - **202** + header `Location: /api/trips/{tripId}`:
 ```json
 {"tripId":"uuid","state":"SEARCHING","matchingAttempt":1,"createdAt":"2026-10-18T09:30:00Z"}
@@ -282,7 +283,10 @@ Mỗi command body mang:
 - **Chốt T10 — định nghĩa `request_hash`:** SHA-256 hex của payload nghiệp vụ canonical — mọi trường command **trừ `commandId` và `commandVersion`** (retry cùng thao tác giữ nguyên hash; bump version không coi là payload khác). `stored_response` = JSON `{"status": <int>, "body": {...}}`; replay trả đúng status/body gốc.
 - **Sửa R03/R05 + chốt T11 (2026-10-20):** claim command bằng `INSERT ... ON CONFLICT DO NOTHING` cùng transaction; request thua đợi transaction thắng rồi replay/conflict. Hash lưu = `SHA256(operation + "|" + reservationId + "|" + SHA256(canonicalBody))`; operation là RESERVE/CONFIRM/RELEASE/FINISH; canonicalBody gồm field nghiệp vụ của DTO, trừ commandId/commandVersion. Ràng buộc cả resource và thao tác trước replay. V4 chuyển hash RESERVE cũ sang wrapper mới và giữ response gốc. Khóa transaction theo reservationId xử lý cả row chưa tồn tại; driver CAS vẫn chống giữ chỗ trùng.
 - **Sửa R06:** commandVersion hợp lệ trong `[1, 2147483647]`; ngoài khoảng → 400 trước mọi ghi DB. INT được dùng nhất quán, không cast long ngoài miền.
+- **Chốt T11-2 (F09):** mỗi bước chỉ được tăng tối đa `MAX_VERSION_STEP = 1000`: `commandVersion > last_command_version + 1000` → 400 `INVALID_INPUT` trước mọi ghi DB. Chặn command đẩy reservation lên INT_MAX khiến không còn version hợp lệ cho các lệnh kế tiếp.
+- **Chốt T10-5/T12-4 (R01) — canonical double trong hash:** mọi trường số float của payload được chuẩn hóa trước khi băm: `-0.0` → `"0.0"`; các giá trị khác giữ đúng `Double.toString`. Do đó latitude/longitude `0.0` và `-0.0` cùng hash (replay, không 409), và hash đã lưu cũ vẫn ổn định.
 - **Chốt T10 — thứ tự kiểm tra reserve:** (1) dedup commandId (replay/conflict) → (2) tombstone: reservation đã terminal (`RELEASED`/`EXPIRED`) → 409 `TOMBSTONED_RESERVATION` → (3) version check → (4) CAS driver. Replay được kiểm tra **trước** tombstone: retry command gốc sau release trả response đã lưu, Trip reconcile trạng thái thật bằng GET.
+- **Chốt T10-2/T10-3 (F10/N29):** `expiresAt` phải nằm trong `(now, now + OFFER_TTL_MAX]` (`OFFER_TTL_MAX = reservation.offer-ttl-max-ms`, default 120000 ms) — ngoài khoảng → 400 `INVALID_INPUT`. Kiểm tra chỉ áp dụng cho reservation **mới**; replay command cũ (kể cả `expiresAt` đã qua) vẫn trả response đã lưu theo §4.1. So sánh dùng cùng nguồn đồng hồ DB (`clock_timestamp()`).
 - `commandVersion`: mỗi reservation có `last_command_version` (khởi tạo 0). Command được chấp nhận khi `commandVersion > last_command_version`; sau đó lưu giá trị lớn nhất. Ngược lại → 409 `STALE_VERSION`. Không dùng timestamp để suy luận thứ tự.
 - **Chốt N24 — release mọi reservationId bị bỏ:** Trip **phải** gửi `release` (tạo tombstone nếu release tới trước) cho mọi `reservationId` đã cấp mà không dùng nữa — kể cả sau khi nhận 409/timeout HTTP; chỉ coi cleanup xong khi có xác nhận terminal. Không tái dùng `commandId` cho thao tác khác; command lỗi (4xx/5xx/timeout) **không được lưu** để replay.
 
@@ -312,7 +316,7 @@ Body:
   "fareVnd": 32000
 }
 ```
-Thực thi **nguyên tử** trong một transaction driver_db: tạo/kiểm tra reservation (state `RESERVED`, lưu sẵn pickup/destination/distance/fare để phục vụ `GET /drivers/me/offer`) + CAS `UPDATE drivers SET status='RESERVED', current_reservation_id=? WHERE id=? AND status='AVAILABLE' AND last_seen_at > ?`; affected rows ≠ 1 → rollback toàn bộ.
+Thực thi **nguyên tử** trong một transaction driver_db: tạo/kiểm tra reservation (state `RESERVED`, lưu sẵn pickup/destination/distance/fare để phục vụ `GET /drivers/me/offer`) + CAS `UPDATE drivers SET status='RESERVED', current_reservation_id=? WHERE id=? AND status='AVAILABLE' AND last_seen_at > clock_timestamp() - make_interval(secs => ?)`; affected rows ≠ 1 → rollback toàn bộ. Cutoff heartbeat đánh giá bằng DB clock **sau khi có khóa row** (chốt T10-1/T10-4): request chờ lock vượt threshold thì heartbeat coi là stale.
 - **201** (lần đầu). Replay cùng `commandId` + hash trả lại **response đã lưu với status gốc 201** theo quy tắc §4.1 — không phải 200 (chốt F06: một thao tác replay có đúng một quy định về HTTP status/body; sửa mâu thuẫn giữa §4.1 và dòng này). Body: `{"reservationId":"uuid","state":"RESERVED","version":1}`
 - 409: `DRIVER_NOT_AVAILABLE` · `STALE_VERSION` · `COMMAND_CONFLICT` · `TOMBSTONED_RESERVATION` (release đã tới trước cho reservationId này — tombstone xem §state-machines)
 
@@ -332,7 +336,7 @@ Chuyển terminal `RELEASED` + `terminal_reason`; giải phóng driver → `AVAI
 - **200** `{"reservationId":"...","state":"RELEASED"}` (idempotent)
 - Release tới trước reserve: tạo tombstone — chèn reservation ở trạng thái terminal `RELEASED` để reserve trễ nhận 409 `TOMBSTONED_RESERVATION`.
 - Tombstone chỉ biết id/version/reason; các field trip/driver/attempt/expiry/route/fare là null, không dùng UUID hay giá trị giả. GET trả null cho field chưa biết.
-- Release được phép bù trừ cả CONFIRMED. Driver BUSY phải khớp cả current_reservation_id và current_trip_id trước khi giải phóng. Row terminal giữ nguyên state/reason; command mới version cao hơn trả 200 state terminal hiện tại (EXPIRED giữ EXPIRED), nâng last_command_version. Retry cùng command replay trước version/state check.
+- **Chốt T11-3 (N30):** release reservation `CONFIRMED` chỉ chấp nhận reason `CANCELLED`; `REJECTED`/`OFFER_EXPIRED` trên CONFIRMED → 409 `STATE_CONFLICT` (driver giữ BUSY). Release được phép bù trừ cả CONFIRMED. Driver BUSY phải khớp cả current_reservation_id và current_trip_id trước khi giải phóng. Row terminal giữ nguyên state/reason; command mới version cao hơn trả 200 state terminal hiện tại (EXPIRED giữ EXPIRED), nâng last_command_version. Retry cùng command replay trước version/state check.
 
 #### POST /internal/reservations/{id}/finish
 Body: `{"commandId":"uuid","commandVersion":3,"tripId":"uuid"}`
@@ -360,6 +364,7 @@ Sau khi trip COMPLETED: chỉ từ state `CONFIRMED` (khớp tripId) → termina
 | `FARE_BASE_VND` | 12000 | Giá gốc mỗi chuyến |
 | `FARE_PER_KM_VND` | 5000 | Giá mỗi km (làm tròn lên) |
 | `OFFER_TTL_SECONDS` | 30 | Thời hạn offer (reservation RESERVED) |
+| `RESERVATION_OFFER_TTL_MAX_MS` | 120000 | Trần tối đa của `expiresAt` khi reserve (`(now, now + max]`) — chốt T10-2 |
 | `HEARTBEAT_STALE_AFTER_MS` | 15000 | Heartbeat cũ hơn → không chọn cho chuyến mới |
 | `MATCHING_MAX_CANDIDATES` | 5 | Số ứng viên mỗi lần đề nghị |
 | `MAX_MATCHING_ATTEMPTS` | 3 | Số lần matching tối đa mỗi trip |

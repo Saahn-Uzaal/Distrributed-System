@@ -49,8 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *  + STALE_VERSION, DRIVER_NOT_AVAILABLE (OFFLINE/heartbeat stale), TOMBSTONED_RESERVATION.
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
-        properties = {"server.port=18101", "reservation.expiry.fixed-delay-ms=50"})
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {"reservation.expiry.fixed-delay-ms=50"})
 @org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 @Testcontainers
 class ReservationLifecycleIntegrationTest {
@@ -96,7 +96,10 @@ class ReservationLifecycleIntegrationTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18101";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body) {
     }
@@ -112,7 +115,7 @@ class ReservationLifecycleIntegrationTest {
     // --- helpers HTTP/DB ---
 
     private Resp send(String method, String path, String internalToken, String jsonBody) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path));
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path));
         switch (method) {
             case "GET" -> req.GET();
             case "POST" -> req.POST(HttpRequest.BodyPublishers.ofString(jsonBody == null ? "" : jsonBody));
@@ -327,6 +330,53 @@ class ReservationLifecycleIntegrationTest {
         assertThat(post(r,"release",UUID.randomUUID(),2,"\"reason\":\"TRIP_COMPLETED\"").status()).isEqualTo(400);
         assertThat(post(r,"confirm",UUID.randomUUID(),2,"").status()).isEqualTo(400);
         assertThat(post(r,"finish",UUID.randomUUID(),2,"").status()).isEqualTo(400);
+    }
+
+    /** T11-2 (F09): confirm với version > last+MAX_VERSION_STEP -> 400 INVALID_INPUT; flow v1->v2->v3 vẫn hoạt động. */
+    @org.junit.jupiter.api.Test
+    void confirmWithHugeVersionIsRejectedButNormalFlowWorks() throws Exception {
+        UUID r=UUID.randomUUID(),trip=UUID.randomUUID(),driver=availableDriver(); reserveOk(r,trip,driver);
+        Resp huge=post(r,"confirm",UUID.randomUUID(),Integer.MAX_VALUE,confirmFields(trip,driver,1));
+        assertThat(huge.status()).isEqualTo(400);
+        assertThat(huge.body().get("code")).isEqualTo("INVALID_INPUT");
+        assertThat(state(r)).isEqualTo("RESERVED");
+
+        Resp confirmed=post(r,"confirm",UUID.randomUUID(),2,confirmFields(trip,driver,1));
+        assertThat(confirmed.status()).isEqualTo(200);
+        Resp released=post(r,"release",UUID.randomUUID(),3,"\"reason\":\"CANCELLED\"");
+        assertThat(released.status()).isEqualTo(200);
+        assertThat(state(r)).isEqualTo("RELEASED");
+    }
+
+    /** T11-3 (N30): release reason OFFER_EXPIRED trên reservation CONFIRMED -> 409 STATE_CONFLICT; driver giữ BUSY. */
+    @org.junit.jupiter.api.Test
+    void offerExpiredReleaseOnConfirmedIsStateConflict() throws Exception {
+        UUID r=UUID.randomUUID(),trip=UUID.randomUUID(),driver=availableDriver(); reserveOk(r,trip,driver);
+        assertThat(post(r,"confirm",UUID.randomUUID(),2,confirmFields(trip,driver,1)).status()).isEqualTo(200);
+        Resp release=post(r,"release",UUID.randomUUID(),3,"\"reason\":\"OFFER_EXPIRED\"");
+        assertThat(release.status()).isEqualTo(409);
+        assertThat(release.body().get("code")).isEqualTo("STATE_CONFLICT");
+        assertThat(state(r)).isEqualTo("CONFIRMED");
+        assertThat(driverRow(driver)).containsEntry("status", "BUSY");
+    }
+
+    /** T11-1 (F08): reservation A bị giữ advisory lock bởi transaction ngoài -> worker BỎ QUA A,
+     * nhưng B quá hạn vẫn EXPIRED trong 1-2 chu kỳ (fixed-delay=50 ms). */
+    @org.junit.jupiter.api.Test
+    void expiryWorkerSkipsLockedReservationButExpiresOthers() throws Exception {
+        UUID a=UUID.randomUUID(),b=UUID.randomUUID();
+        reserveOk(a,UUID.randomUUID(),availableDriver());
+        reserveOk(b,UUID.randomUUID(),availableDriver());
+        jdbc.update("UPDATE reservations SET expires_at=now()-interval '1 second' WHERE id IN (?,?)",a,b);
+
+        try(var lock=jdbc.getDataSource().getConnection()) {
+            lock.setAutoCommit(false);
+            // Cùng key với ReservationRepository.tryLockReservation: "reservation:" + id.
+            lock.createStatement().execute("SELECT pg_advisory_xact_lock(hashtextextended('reservation:' || '" + a + "', 0))");
+
+            awaitState(b,"EXPIRED");
+            assertThat(state(a)).isEqualTo("RESERVED");
+        }
     }
 
     @org.junit.jupiter.api.Test

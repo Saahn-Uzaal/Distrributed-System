@@ -22,9 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * health mở không auth + mọi lỗi JSON mang correlationId (contract §1.1/§5).
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                "server.port=18101",
                 // R04 fix: Boot 4 đã chuyển DataSourceAutoConfiguration sang
                 // org.springframework.boot.jdbc.autoconfigure — tên cũ bị bỏ qua im lặng,
                 // test vẫn kết nối DB dev. Flyway không auto-configure trong Boot 4;
@@ -37,13 +36,16 @@ class SecuritySmokeTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18101";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body) {
     }
 
     private Resp get(String path, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).GET();
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path)).GET();
         if (correlationHeader != null) {
             req.header("X-Correlation-ID", correlationHeader);
         }

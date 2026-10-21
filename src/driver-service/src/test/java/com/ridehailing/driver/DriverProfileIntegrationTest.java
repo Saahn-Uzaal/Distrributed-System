@@ -50,8 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * JWT ký bằng private key test (public key inject qua property) — pattern SecurityProbeTest.
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
-        properties = "server.port=18099")
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 @Testcontainers
 class DriverProfileIntegrationTest {
@@ -97,7 +96,10 @@ class DriverProfileIntegrationTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18099";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body) {
     }
@@ -125,7 +127,7 @@ class DriverProfileIntegrationTest {
     }
 
     private Resp send(String method, String path, String bearerToken, String internalToken, String jsonBody) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path));
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path));
         switch (method) {
             case "GET" -> req.GET();
             case "POST" -> req.POST(HttpRequest.BodyPublishers.ofString(jsonBody == null ? "" : jsonBody));
@@ -310,6 +312,48 @@ class DriverProfileIntegrationTest {
         // Chốt T09: AVAILABLE khi RESERVED cũng 409 (không có transition PUT từ RESERVED).
         Resp on = send("PUT", "/api/drivers/me/availability", token, null, "{\"status\":\"AVAILABLE\"}");
         assertThat(on.status()).isEqualTo(409);
+    }
+
+    /** T09-3 (F13): driver RESERVED với current_trip_id NULL -> 409 details.tripId lấy từ reservation. */
+    @org.junit.jupiter.api.Test
+    void offlineConflictResolvesTripIdFromReservationWhenCurrentTripIsNull() throws Exception {
+        UUID user = UUID.randomUUID();
+        UUID driverId = createProfileViaApi(user, "Driver A", "51A-123.45", "MOTORBIKE");
+        String token = signToken(user, "DRIVER", user + "@t9.test");
+        UUID reservationId = UUID.randomUUID(), tripId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO reservations (id, trip_id, driver_id, attempt, state, expires_at, last_command_version,"
+                        + " pickup_lat, pickup_lng, destination_lat, destination_lng, distance_m, fare_vnd)"
+                        + " VALUES (?, ?, ?, 1, 'RESERVED', now() + interval '30 seconds', 1, 10.7, 106.7, 10.8, 106.8, 1500, 45000)",
+                reservationId, tripId, driverId);
+        jdbc.update("UPDATE drivers SET status = 'RESERVED', current_reservation_id = ? WHERE id = ?", reservationId, driverId);
+
+        Resp off = send("PUT", "/api/drivers/me/availability", token, null, "{\"status\":\"OFFLINE\"}");
+        assertThat(off.status()).isEqualTo(409);
+        assertThat(off.body().get("code")).isEqualTo("STATE_CONFLICT");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> details = (Map<String, Object>) off.body().get("details");
+        assertThat(details.get("state")).isEqualTo("RESERVED");
+        assertThat(details.get("tripId")).isEqualTo(tripId.toString());
+    }
+
+    /** T09-4 (F14): plate normalize (trim/uppercase) -> "51a-123.45 " trùng "51A-123.45" -> 409 PLATE_TAKEN; giá trị lưu đã chuẩn hóa. */
+    @org.junit.jupiter.api.Test
+    void plateNormalizationMakesCaseAndWhitespaceDuplicatesConflict() throws Exception {
+        UUID user1 = UUID.randomUUID();
+        createProfileViaApi(user1, "Driver A", "51A-123.45", "MOTORBIKE");
+        String storedPlate = jdbc.queryForObject(
+                "SELECT plate_number FROM vehicles WHERE id = (SELECT vehicle_id FROM drivers WHERE user_id = ?)",
+                String.class, user1);
+        assertThat(storedPlate).isEqualTo("51A-123.45");
+
+        UUID user2 = UUID.randomUUID();
+        Resp resp = send("POST", "/api/drivers/me/profile", signToken(user2, "DRIVER", user2 + "@t9.test"), null,
+                "{\"displayName\":\"Driver C\",\"vehicle\":{\"plateNumber\":\"51a-123.45 \",\"vehicleType\":\"CAR\"}}");
+        assertThat(resp.status()).isEqualTo(409);
+        assertThat(resp.body().get("code")).isEqualTo("PLATE_TAKEN");
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM drivers WHERE user_id = ?", Integer.class, user2);
+        assertThat(count).isZero();
     }
 
     @org.junit.jupiter.api.Test

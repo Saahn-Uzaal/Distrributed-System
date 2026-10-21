@@ -64,8 +64,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * Ghi chú: Spring Boot 4 đã bỏ TestRestTemplate/@AutoConfigureMockMvc -> dùng java.net.http.HttpClient.
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
-        properties = "server.port=18097")
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 class AuthFlowIntegrationTest {
 
@@ -110,7 +109,10 @@ class AuthFlowIntegrationTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18097";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     @Autowired
     JdbcTemplate jdbc;
@@ -122,7 +124,7 @@ class AuthFlowIntegrationTest {
     }
 
     private Resp post(String path, Object body) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest req = HttpRequest.newBuilder(URI.create(base() + path))
                 .header("Content-Type", "application/json")
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(
                         JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8)))
@@ -132,7 +134,7 @@ class AuthFlowIntegrationTest {
     }
 
     private Resp get(String path, String bearerToken) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .GET();
         if (bearerToken != null) {
             req.header("Authorization", "Bearer " + bearerToken);
@@ -531,7 +533,7 @@ class AuthFlowIntegrationTest {
     }
 
     private Resp putJson(String path, Object body, String correlationHeader) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .PUT(java.net.http.HttpRequest.BodyPublishers.ofByteArray(
                         JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8)))
                 .header("Content-Type", "application/json");
@@ -543,7 +545,7 @@ class AuthFlowIntegrationTest {
     }
 
     private Resp postRaw(String path, String rawBody, String contentType) throws Exception {
-        HttpRequest req = HttpRequest.newBuilder(URI.create(BASE + path))
+        HttpRequest req = HttpRequest.newBuilder(URI.create(base() + path))
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(rawBody))
                 .header("Content-Type", contentType)
                 .build();

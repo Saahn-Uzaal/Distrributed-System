@@ -60,8 +60,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *  - ý định matching ghi trong DB: outbox PENDING TripRequested attempt 1 + trip_event TRIP_CREATED.
  */
 @SpringBootTest(
-        webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT,
-        properties = "server.port=18102")
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 class TripIntegrationTest {
 
@@ -105,7 +104,10 @@ class TripIntegrationTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
-    private static final String BASE = "http://localhost:18102";
+    @org.springframework.boot.test.web.server.LocalServerPort
+    int port;
+
+    private String base() { return "http://localhost:" + port; }
 
     record Resp(int status, Map<String, Object> body, Map<String, List<String>> headers) {
     }
@@ -144,7 +146,7 @@ class TripIntegrationTest {
     }
 
     private Resp send(String method, String path, String bearerToken, Map<String, String> extraHeaders, String jsonBody) throws Exception {
-        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path));
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path));
         switch (method) {
             case "GET" -> req.GET();
             case "POST" -> req.POST(HttpRequest.BodyPublishers.ofString(jsonBody == null ? "" : jsonBody));
@@ -266,6 +268,107 @@ class TripIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM trips", Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM outbox WHERE status = 'PENDING'", Integer.class))
                 .isEqualTo(1);
+    }
+
+    /** T12-1 (R03): createdAt sinh một lần phía server — GET, DB và replay trả cùng giá trị. */
+    @org.junit.jupiter.api.Test
+    void createdAtIsStableAcrossGetAndReplay() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        String token = token(passenger, "PASSENGER");
+        UUID key = UUID.randomUUID();
+
+        Resp first = send("POST", "/api/trips", token, Map.of("Idempotency-Key", key.toString()), QUOTE_BODY);
+        assertThat(first.status()).isEqualTo(202);
+        String tripId = (String) first.body().get("tripId");
+        String createdAt = (String) first.body().get("createdAt");
+
+        Resp detail = send("GET", "/api/trips/" + tripId, token, Map.of(), null);
+        assertThat(detail.status()).isEqualTo(200);
+        assertThat(detail.body().get("createdAt")).isEqualTo(createdAt);
+
+        String dbCreatedAt = jdbc.queryForObject(
+                "SELECT created_at FROM trips WHERE id=?", Instant.class, UUID.fromString(tripId)).toString();
+        assertThat(dbCreatedAt).isEqualTo(createdAt);
+
+        Resp replay = send("POST", "/api/trips", token, Map.of("Idempotency-Key", key.toString()), QUOTE_BODY);
+        assertThat(replay.status()).isEqualTo(202);
+        assertThat(replay.body().get("tripId")).isEqualTo(tripId);
+        assertThat(replay.body().get("createdAt")).isEqualTo(createdAt);
+    }
+
+    /** T12-2 (N31): outbox envelope — aggregate_version=1, routing_key='trip.requested' sau create. */
+    @org.junit.jupiter.api.Test
+    void outboxRowCarriesAggregateVersionAndRoutingKey() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        String token = token(passenger, "PASSENGER");
+        Resp resp = send("POST", "/api/trips", token, Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY);
+        assertThat(resp.status()).isEqualTo(202);
+        UUID tripId = UUID.fromString((String) resp.body().get("tripId"));
+
+        Map<String, Object> outbox = jdbc.queryForMap(
+                "SELECT aggregate_version, schema_version, producer, routing_key, attempts FROM outbox WHERE aggregate_id = ?", tripId);
+        assertThat(((Number) outbox.get("aggregate_version")).intValue()).isEqualTo(1);
+        assertThat(outbox.get("routing_key")).isEqualTo("trip.requested");
+    }
+
+    /** T12-4 (R01): canonical double — latitude 0.0 và -0.0 cùng hash -> replay 202, không 409 MISMATCH. */
+    @org.junit.jupiter.api.Test
+    void negativeZeroLatitudeReplaysInsteadOfMismatch() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        String token = token(passenger, "PASSENGER");
+        UUID key = UUID.randomUUID();
+
+        Resp first = send("POST", "/api/trips", token, Map.of("Idempotency-Key", key.toString()),
+                "{\"pickup\":{\"latitude\":0.0,\"longitude\":106.7009},"
+                        + "\"destination\":{\"latitude\":10.8000,\"longitude\":106.7200}}");
+        assertThat(first.status()).isEqualTo(202);
+
+        Resp replay = send("POST", "/api/trips", token, Map.of("Idempotency-Key", key.toString()),
+                "{\"pickup\":{\"latitude\":-0.0,\"longitude\":106.7009},"
+                        + "\"destination\":{\"latitude\":10.8000,\"longitude\":106.7200}}");
+        assertThat(replay.status()).isEqualTo(202);
+        assertThat(replay.body().get("tripId")).isEqualTo(first.body().get("tripId"));
+    }
+
+    /** T12-5 (N32): list chạy REPEATABLE READ — totalElements luôn khớp content dù có create đồng thời. */
+    @org.junit.jupiter.api.Test
+    void listUnderRepeatableReadStaysConsistentWithConcurrentCreates() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        String token = token(passenger, "PASSENGER");
+
+        for (int i = 0; i < 2; i++) {
+            Resp c = send("POST", "/api/trips", token, Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY);
+            assertThat(c.status()).isEqualTo(202);
+        }
+
+        var executor = Executors.newFixedThreadPool(5);
+        try {
+            List<java.util.concurrent.Future<Resp>> creates = new java.util.ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                creates.add(executor.submit(() -> send("POST", "/api/trips", token,
+                        Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY)));
+            }
+            java.util.concurrent.Future<Resp> listFuture = executor.submit(
+                    () -> send("GET", "/api/trips?page=0&size=20", token, Map.of(), null));
+            for (var f : creates) {
+                Resp r = f.get(15, TimeUnit.SECONDS);
+                assertThat(r.status()).isEqualTo(202);
+            }
+            Resp list = listFuture.get(15, TimeUnit.SECONDS);
+            assertThat(list.status()).isEqualTo(200);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> content = (List<Map<String, Object>>) list.body().get("content");
+            long totalElements = ((Number) list.body().get("totalElements")).longValue();
+            // Snapshot REPEATABLE READ: size=20 bao phủ mọi row -> totalElements == |content|.
+            assertThat(totalElements).isEqualTo(content.size());
+            assertThat(content.size()).isBetween(2, 6);
+
+            long finalCount = jdbc.queryForObject("SELECT COUNT(*) FROM trips WHERE passenger_id=?", Long.class, passenger);
+            assertThat(finalCount).isEqualTo(6);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @org.junit.jupiter.api.Test
@@ -554,7 +657,7 @@ class TripIntegrationTest {
                     key, hash, originalResponse);
             var upgraded = Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load();
             upgraded.migrate();
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("3");
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("4");
             assertThat(legacy.queryForObject("SELECT principal_id FROM idempotency_keys WHERE key = ?", UUID.class, key))
                     .isEqualTo(passenger);
             assertThat(legacy.queryForObject("SELECT operation FROM idempotency_keys WHERE key = ?", String.class, key))

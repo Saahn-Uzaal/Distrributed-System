@@ -43,11 +43,13 @@ docker exec ridehailing-postgres psql -U postgres_admin -Atc "\l"
 
 ## Local infrastructure — RabbitMQ (T04)
 
-Chạy sau `docker compose up -d` ở mục trên:
+Topology được declare **tự động** bởi service one-shot `topo-declare` trong compose (chạy sau khi broker healthy) — mỗi lần `docker compose up -d`, kể cả sau `down -v`, queue/binding tồn tại mà không cần chạy tay. Script thủ công vẫn giữ làm công cụ phụ:
 
 ```bash
 bash infra/rabbitmq/declare-topology.sh   # idempotent — declare topology theo spec mục 9
 ```
+
+Nếu broker đã chạy sẵn và volume bị reset khi container còn sống, chạy lại script (hoặc `docker compose up -d --force-recreate topo-declare`).
 
 - Topology: topic exchange durable `ride.events` + DLX `ride.events.dlx`; inbox queues `matching.inbox ← trip.requested`, `trip.inbox ← matching.#` **và** `payment.#` (F02 — PaymentSucceeded/PaymentFailed về Trip), `payment.inbox ← trip.completed`; mỗi queue dead-letter sang `ride.events.dlx` về DLQ riêng (`matching.dlq`, `trip.dlq`, `payment.dlq`).
 - Declare qua AMQP (escript dùng `amqp_client` có sẵn trong image rabbitmq, chạy one-off container trên network `ridehailing_net`) — không phụ thuộc HTTP API.
@@ -87,7 +89,12 @@ docker compose --env-file .env -f deploy/compose.yaml up -d
 docker exec ridehailing-postgres psql -U postgres_admin -Atc "\l"
 ```
 
-### 2. Declare RabbitMQ topology (idempotent — chạy lại được, không xóa queue/volume)
+### 2. Declare RabbitMQ topology (tự động qua service one-shot `topo-declare` trong compose)
+Sau `up -d`, kiểm tra queue/binding đã tồn tại:
+```bash
+docker exec ridehailing-rabbitmq rabbitmqctl list_queues name durable
+```
+Nếu broker chạy sẵn mà volume bị reset khi container còn sống, chạy lại script thủ công (idempotent — không xóa queue/volume):
 ```bash
 bash infra/rabbitmq/declare-topology.sh
 ```
@@ -113,7 +120,7 @@ java -jar src/identity-service/target/identity-service-0.1.0.jar
 curl http://localhost:8081/actuator/health
 ```
 
-**Quan trọng — `.env` vs environment của tiến trình Java:** Compose nạp `.env` cho **container** (PostgreSQL/RabbitMQ). Tiến trình Java chạy local **không tự đọc `.env`**; nó đọc biến môi trường của chính tiến trình, hoặc dev default trong `application.yml` (khớp giá trị `.env.example`). Nếu chạy với env khác, set tường minh trên dòng lệnh, ví dụ:
+**Quan trọng — `.env` vs environment của tiến trình Java:** Compose nạp `.env` cho **container** (PostgreSQL/RabbitMQ). Tiến trình Java chạy local **không tự đọc `.env`**; nó chỉ đọc biến môi trường của chính tiến trình. Từ đợt sửa N09, mật khẩu DB **không còn dev default** trong `application.yml` — thiếu env thì service dừng ngay với thông báo nêu tên biến thiếu (không in giá trị). Set tường minh trên dòng lệnh, ví dụ:
 
 ```bash
 read -r -s -p 'Identity DB password: ' IDENTITY_DB_PASSWORD
@@ -121,7 +128,7 @@ export IDENTITY_DB_PASSWORD
 JWT_PRIVATE_KEY_PATH=keys/jwt-private.pem java -jar src/identity-service/target/identity-service-0.1.0.jar
 ```
 
-Từ T07: driver-service và trip-service verify JWT bằng public key — chạy local cần set env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (cả hai); driver-service thêm `INTERNAL_API_TOKEN` cho internal API (`X-Internal-Token`). Dev default trong `application.yml` khớp `.env.example`, nhưng khi chạy jar trực tiếp nên set tường minh.
+Từ T07: driver-service và trip-service verify JWT bằng public key — chạy local cần set env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (cả hai); driver-service thêm `INTERNAL_API_TOKEN` cho internal API (`X-Internal-Token`). Mỗi service cần đúng biến mật khẩu DB của mình (`IDENTITY_DB_PASSWORD`, `DRIVER_DB_PASSWORD`, `TRIP_DB_PASSWORD`, `MATCHING_DB_PASSWORD`, `PAYMENT_DB_PASSWORD`) — thiếu thì service dừng với thông báo nêu tên biến (N09).
 
 Không in secret (mật khẩu, key) ra console khi minh họa.
 

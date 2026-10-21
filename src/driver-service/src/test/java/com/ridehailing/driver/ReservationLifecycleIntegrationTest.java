@@ -56,7 +56,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ReservationLifecycleIntegrationTest {
 
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine")
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.11-alpine") // F32: pin patch, cùng tag với compose
             .withUsername("driver_test")
             .withPassword("driver_test_pw");
 

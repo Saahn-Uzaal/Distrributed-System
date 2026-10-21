@@ -30,6 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
                 // bean custom FlywayConfig tắt bằng app.flyway.enabled=false.
                 "spring.autoconfigure.exclude=" +
                         "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
+                // N09: datasource bị exclude — dummy password để RequiredDbPasswordValidator không chặn.
+                "spring.datasource.password=smoke_no_db",
                 "app.flyway.enabled=false"
         })
 class SecuritySmokeTest {

@@ -7,7 +7,8 @@ name: ridehailing
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # F32 fix: pin patch version đầy đủ (postgres:17.11-alpine = psql 17.11) — không trôi theo tag minor.
+    image: postgres:17.11-alpine
     container_name: ridehailing-postgres
     restart: unless-stopped
     environment:
@@ -26,8 +27,11 @@ services:
     ports:
       # Bind localhost only (debug) — spec mục 12
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    # N18 fix: healthy CHỈ sau khi init script tạo xong DB/user — kiểm tra qua TCP bằng tài khoản
+    # service (payment_svc) trên payment_db (DB tạo cuối cùng trong init); pg_isready sớm
+    # (server tạm của docker-entrypoint) không đủ.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -q -U $${POSTGRES_USER} -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U $${POSTGRES_USER} && PGPASSWORD=$$PAYMENT_DB_PASSWORD psql -h 127.0.0.1 -U payment_svc -d payment_db -c 'select 1' >/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -35,7 +39,8 @@ services:
     networks: [backend]
 
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    # F32 fix: pin đúng patch khớp record framing đã chép trong declare_topology.es (RabbitMQ 3.13.7).
+    image: rabbitmq:3.13.7-management-alpine
     container_name: ridehailing-rabbitmq
     restart: unless-stopped
     environment:
@@ -49,8 +54,10 @@ services:
     volumes:
       # Dữ liệu broker (queues, messages persistent) giữ sau restart — spec mục 9/12
       - rabbitmq_data:/var/lib/rabbitmq
+    # ping (distribution) có thể pass TRƯỚC khi listener AMQP 5672 sẵn sàng — thêm nc -z
+    # để healthy chỉ khi port AMQP thật sự nhận kết nối (tránh race với topo-declare).
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping && nc -z 127.0.0.1 5672"]
       interval: 10s
       timeout: 10s
       retries: 18
@@ -60,15 +67,41 @@ services:
   # T08 — Nginx: phục vụ frontend build (web/dist) + proxy /api/* tới services local trên host.
   # Public port 8080 theo spec §12. Config: deploy/nginx/nginx.conf.
   nginx:
-    image: nginx:1.27-alpine
+    # F32 fix: pin patch version đầy đủ (nginx:1.27.5-alpine — bản thực tế của tag 1.27).
+    image: nginx:1.27.5-alpine
     container_name: ridehailing-nginx
     restart: unless-stopped
+    # N14 fix: host.docker.internal không tồn tại trên Docker Engine Linux (WSL/VM) —
+    # map về host-gateway để proxy /api/* tới services local chạy được trên mọi nền tảng.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     volumes:
       - ../deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       # Build frontend trước khi up nginx (npm run build ở src/web/) — C02
       - ../src/web/dist:/usr/share/nginx/html:ro
+    networks: [backend]
+
+  # T04 (+N15): declare RabbitMQ topology TỰ ĐỘNG sau khi broker healthy — one-shot container.
+  # Mỗi lần `docker compose up -d` (kể cả sau `down -v`) container tạo mới và chạy lại script,
+  # nên reset volume broker KHÔNG cần chạy tay. Script thủ công vẫn giữ làm công cụ phụ.
+  topo-declare:
+    image: rabbitmq:3.13.7-management-alpine   # F32: cùng tag pin với broker
+    container_name: ridehailing-topo-declare
+    restart: "no"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # Image rabbitmq mặc định đặt RABBITMQ_HOST=false — phải set tường minh tên service.
+      RABBITMQ_HOST: rabbitmq
+      ERL_LIBS: /opt/rabbitmq/plugins
+    volumes:
+      - ../infra/rabbitmq:/topo:ro
+    command: escript /topo/declare_topology.es
     networks: [backend]
 
 volumes:

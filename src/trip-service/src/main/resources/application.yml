@@ -9,7 +9,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/trip_db
     username: trip_svc
-    password: ${TRIP_DB_PASSWORD:trip_dev_2026}
+    # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
+    password: ${TRIP_DB_PASSWORD}
 
 # T07 — security (contract api-contracts.md §1/§2): verify JWT RS256 bằng public key.
 jwt:

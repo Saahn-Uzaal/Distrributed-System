@@ -9,7 +9,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/matching_db
     username: matching_svc
-    password: ${MATCHING_DB_PASSWORD:matching_dev_2026}
+    # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
+    password: ${MATCHING_DB_PASSWORD}
 
 management:
   endpoints:

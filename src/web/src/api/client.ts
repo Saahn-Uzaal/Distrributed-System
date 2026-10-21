@@ -1,6 +1,26 @@
 import { clearSession, loadSession } from '../auth/session'
 import type { Role, SessionUser } from '../auth/session'
 
+/**
+ * N16 fix: `crypto.randomUUID()` chỉ có trong secure context (https/localhost).
+ * Mở http://<IP>:8080 từ máy khác → mọi API call ném TypeError.
+ * Fallback: dựng UUID v4 từ `crypto.getRandomValues` (có sẵn ở cả HTTP thường).
+ */
+export function uuidV4Fallback(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40 // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // variant 10
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export function newUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return uuidV4Fallback()
+}
+
 /** Error shape theo contract §1.1: {code, message, correlationId, details}. */
 export class ApiError extends Error {
   constructor(
@@ -27,7 +47,7 @@ async function request<T>(
   const session = loadSession()
   const headers: Record<string, string> = {
     // contract §5: client sinh UUID correlation ID, server echo lại trong response/error
-    'X-Correlation-ID': crypto.randomUUID()
+    'X-Correlation-ID': newUuid()
   }
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
   if (options.authenticated !== false && session) {

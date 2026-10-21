@@ -9,7 +9,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/payment_db
     username: payment_svc
-    password: ${PAYMENT_DB_PASSWORD:payment_dev_2026}
+    # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
+    password: ${PAYMENT_DB_PASSWORD}
 
 management:
   endpoints:

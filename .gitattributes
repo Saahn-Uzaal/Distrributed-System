@@ -1,0 +1,4 @@
+# C05/N19 fix: chuẩn hóa line ending toàn repo — mọi file text về LF, chỉ script Windows giữ CRLF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

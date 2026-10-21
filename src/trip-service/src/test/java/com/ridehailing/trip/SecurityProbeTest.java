@@ -43,6 +43,8 @@ import static org.assertj.core.api.Assertions.assertThat;
                 // Flyway không auto-configure trong Boot 4; bean custom FlywayConfig
                 // tắt bằng app.flyway.enabled=false.
                 "spring.datasource.url=jdbc:h2:mem:trip_probe;DB_CLOSE_DELAY=-1",
+                // N09: main yml không còn dev default password — H2 probe set giá trị dummy.
+                "spring.datasource.password=probe_dummy_password",
                 "app.flyway.enabled=false"
         })
 class SecurityProbeTest {

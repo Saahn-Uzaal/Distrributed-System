@@ -9,7 +9,8 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/identity_db
     username: identity_svc
-    password: ${IDENTITY_DB_PASSWORD:identity_dev_2026}
+    # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
+    password: ${IDENTITY_DB_PASSWORD}
   jpa:
     hibernate:
       # Flyway sở hữu schema (spec §7) — không ddl-auto=update trong bản nộp

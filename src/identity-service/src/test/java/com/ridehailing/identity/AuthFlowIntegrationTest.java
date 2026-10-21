@@ -69,7 +69,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 class AuthFlowIntegrationTest {
 
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine")
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.11-alpine") // F32: pin patch, cùng tag với compose
             .withUsername("identity_test")
             .withPassword("identity_test_pw");
 

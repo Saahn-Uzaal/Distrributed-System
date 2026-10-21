@@ -3,7 +3,8 @@
 %% Chạy trong one-off container trên mạng ridehailing_net (kết nối AMQP qua DNS "rabbitmq"):
 %%   docker run --rm -e RABBITMQ_USER -e RABBITMQ_PASSWORD -e ERL_LIBS=/opt/rabbitmq/plugins \
 %%     --network ridehailing_net -v <repo>/infra/rabbitmq:/topo:ro \
-%%     rabbitmq:3-management-alpine escript /topo/declare_topology.es
+%%     rabbitmq:3.13.7-management-alpine escript /topo/declare_topology.es
+%% (F32: tag pin patch đầy đủ, khớp record framing bên dưới chép từ 3.13.7.)
 %% Topology (spec mục 9 + sửa F02 đợt 19/10/2026 — contract events.md §3.5/§3.6:
 %% PaymentSucceeded/PaymentFailed được Payment phát cho Trip):
 %%   exchange topic durable : ride.events        (event fan-out)
@@ -21,15 +22,68 @@
 -record('queue.declare',    {ticket = 0, queue = <<"">>, passive = false, durable = false, exclusive = false, auto_delete = false, nowait = false, arguments = []}).
 -record('queue.bind',       {ticket = 0, queue = <<"">>, exchange, routing_key = <<"">>, nowait = false, arguments = []}).
 
+%% escript (erl_eval): os:getenv trả về false (KHÔNG PHẢI undefined) khi biến chưa set.
+env_binary(Name) ->
+    case os:getenv(Name) of
+        undefined -> erlang:error({missing_env, Name});
+        false     -> erlang:error({missing_env, Name});
+        S         -> list_to_binary(S)
+    end.
+
+%% F28: record params cho amqp_connection:start/1 — copy nguyên văn từ
+%% amqp_client-3.13.7/include/amqp_client.hrl (trường host là string, port mặc định 5672).
+-record(amqp_params_network, {username           = <<"guest">>,
+                              password           = <<"guest">>,
+                              virtual_host       = <<"/">>,
+                              host               = "localhost",
+                              port               = undefined,
+                              channel_max        = 2047,
+                              frame_max          = 0,
+                              heartbeat          = 10,
+                              connection_timeout = 60000,
+                              ssl_options        = none,
+                              auth_mechanisms    =
+                                  [fun amqp_auth_mechanisms:plain/3,
+                                   fun amqp_auth_mechanisms:amqplain/3],
+                              client_properties  = [],
+                              socket_options     = []}).
+
+%% Chỉ retry với lỗi mạng transient (listener chưa sẵn sàng / DNS chưa resolve);
+%% lỗi auth (access_refused...) fail ngay để không che dấu sai credential.
+start_with_retry(_Params, 0) ->
+    erlang:error({topo_declare_gave_up, econnrefused});
+start_with_retry(Params, N) ->
+    case amqp_connection:start(Params) of
+        {ok, C} -> C;
+        {error, Reason}
+            when Reason =:= econnrefused; Reason =:= timeout;
+                 Reason =:= nxdomain;   Reason =:= unknown_host ->
+            timer:sleep(2000), start_with_retry(Params, N - 1);
+        {error, Reason} -> erlang:error({topo_declare_failed, Reason})
+    end.
+
 main(_) ->
-    User = os:getenv("RABBITMQ_USER"),
-    Pass = os:getenv("RABBITMQ_PASSWORD"),
-    Host = "rabbitmq",
+    %% os:getenv trả về string; record amqp_params_network yêu cầu binary cho username/password
+    %% (amqp_uri:parse trước đây đã trả binary — giữ cùng kiểu dữ liệu).
+    User = env_binary("RABBITMQ_USER"),
+    Pass = env_binary("RABBITMQ_PASSWORD"),
+    %% RABBITMQ_HOST (mặc định "rabbitmq") — cho phép kiểm chứng với broker test khác.
+    %% NOTE: image rabbitmq mặc định đặt env RABBITMQ_HOST=false — coi như chưa set.
+    Host0 = os:getenv("RABBITMQ_HOST"),
+    Host = case Host0 of
+        false     -> "rabbitmq";  %% escript: biến chưa set
+        undefined -> "rabbitmq";
+        ""        -> "rabbitmq";
+        "false"   -> "rabbitmq";  %% image rabbitmq mặc định RABBITMQ_HOST=false
+        H         -> H
+    end,
 
     {ok, _} = application:ensure_all_started(amqp_client),
-    %% amqp_uri:parse/1 trả về record #amqp_params_network{} sẵn dùng cho amqp_connection:start/1
-    {ok, Params} = amqp_uri:parse("amqp://" ++ User ++ ":" ++ Pass ++ "@" ++ Host),
-    {ok, C} = amqp_connection:start(Params),
+    %% F28 fix: KHÔNG dựng AMQP URI từ credential — record #amqp_params_network{} tạo trực tiếp
+    %% từ env nên mật khẩu chứa '#', '@', ':', '/' không cần percent-encode và không bị parse lỗi.
+    Params = #amqp_params_network{username = User, password = Pass, host = Host},
+    %% Retry: listener AMQP có thể chưa sẵn sàng ngay sau khi healthcheck pass (race lúc boot).
+    C = start_with_retry(Params, 30),
     {ok, Ch} = amqp_connection:open_channel(C),
 
     %% Exchanges: topic, durable (declare idempotent)

@@ -1,6 +1,6 @@
 # Handoff — trạng thái cho lượt kế tiếp
 
-Cập nhật: 2026-10-21, giữa đợt sửa **FIX_LIST T01–T12** (82 mục): phase 1–5 **xong** — C01–C03; T07 security (F01+N10, N02, F02, F03, F04, Q03) + nginx T08-1/T08-2; contract T05 (N15/N21–N24/F31); T07 logging (F20/F21/N11/N12/N13 + Q02); T09–T12 correctness/time — full repo `clean verify` **194 tests, 0 failures**; frontend 13/13. Trạng thái từng mục theo checkbox `[ ]/[x]` trong [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md); tiến độ + bằng chứng ở `docs/progress.md`. Lịch sử trước đó: R01–R07 của T09/T10/T12 và T11 DONE (130 tests lúc đó). Chi tiết: [sửa review](T09-T12_REVIEW_FIXES.md), [T11](tasks/T11.md).
+Cập nhật: 2026-10-22, giữa đợt sửa **FIX_LIST T01–T12** (82 mục): phase 1–6 **xong** — C01–C03; T07 security (F01+N10, N02, F02, F03, F04, Q03) + nginx T08-1/T08-2; contract T05 (N15/N21–N24/F31); T07 logging (F20/F21/N11/N12/N13 + Q02); T09–T12 correctness/time; **Phase 6 infra/scripts** (T03/T04 gồm auto-declare topology, F25–F29, N14/N16: pin image tags, safe env handling, DB-password fail-fast, keypair check) — full repo `clean verify` **196 tests, 0 failures**; frontend 16/16. Trạng thái từng mục theo checkbox `[ ]/[x]` trong [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md); tiến độ + bằng chứng ở `docs/progress.md`. Lịch sử trước đó: R01–R07 của T09/T10/T12 và T11 DONE (130 tests lúc đó). Chi tiết: [sửa review](T09-T12_REVIEW_FIXES.md), [T11](tasks/T11.md).
 
 **Kết quả mới nhất:** Driver V4 + lifecycle confirm/release/finish, release-before-reserve tombstone, command claim nguyên tử, resource/operation hash, version bounds và expiry RESERVED. Trip V3 scope replay theo principal/operation/key, phân quyền qua driver_user_id, phân trang long. Candidates/event contract mang driverUserId tách biệt driverId. Test nâng cấp giữ replay cũ, contention qua deadline, fencing và restart ứng dụng đều pass. Chưa có publisher/matching/saga; không triển khai T13+ trong lượt này.
 
@@ -9,7 +9,7 @@ Cập nhật: 2026-10-21, giữa đợt sửa **FIX_LIST T01–T12** (82 mục):
 Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cần sửa**: [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md). Phase 1–5 đã xong (đánh dấu `[x]` kèm bằng chứng): C01–C03; T07 security + nginx T08-1/2; contract T05 (N15/N21–N24/F31); T07 logging F20/F21/N11/N12/N13 (+Q02); T09–T12 correctness/time.
 
 **T13 (và mọi task mới) chỉ bắt đầu sau khi xong các mục còn lại của FIX_LIST**, còn lại:
-- **Phase 6 — infra/scripts**: mục T03/T04 (gồm T04-3 auto-declare topology), F25–F29, N14/N16.
+- ~~Phase 6 — infra/scripts~~ **XONG** (2026-10-22): T03/T04 gồm auto-declare topology, F25–F29, N14/N16.
 - **Phase 7 — frontend + nginx**: F15–F19, N34, T08-3..8/16/17.
 - **Phase 8 — P3 còn lại**: C04/C05/C06, T06-1..4, T07-11..13, T05-7..12 (gồm T05-10 — chốt xong sẽ mở khóa T12-6), Q01.
 
@@ -45,7 +45,7 @@ Trạng thái sửa theo dõi bằng checkbox `[ ]/[x]` trong chính file FIX_LI
 
 ## Task kế tiếp đề xuất (chưa thực hiện)
 
-**Đang giữa đợt sửa FIX_LIST_T01-T12** — phase 1–5 đã xong (mới nhất: T09–T12 correctness/time, full verify **194 tests / 0 failures**). Bước tiếp theo là **phase 6**: infra/scripts (mục T03/T04 gồm T04-3 auto-declare topology, F25–F29, N14/N16); rồi phase 7 frontend + nginx và phase 8 P3 còn lại theo thứ tự trong file.
+**Đang giữa đợt sửa FIX_LIST_T01-T12** — phase 1–6 đã xong (mới nhất: Phase 6 infra/scripts, full verify **196 tests / 0 failures**, frontend 16/16). Bước tiếp theo là **phase 7**: frontend + nginx (F15–F19, N34, T08-3..8/16/17); rồi phase 8 P3 còn lại (C04/C06, T06-1..4, T07-11..13, T05-7..12 gồm T05-10 — mở khóa T12-6/N28, Q01) theo thứ tự trong file.
 
 ### T13 hoặc T14 (chỉ sau khi FIX_LIST xong)
 ### A. T13 — Outbox publisher Trip (owner A, tiếp nối T12)

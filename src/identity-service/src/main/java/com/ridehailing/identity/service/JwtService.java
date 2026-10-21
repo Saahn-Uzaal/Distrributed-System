@@ -48,6 +48,9 @@ public class JwtService {
         this.expiresInSeconds = props.getExpiresInSeconds();
         PrivateKey privateKey = loadPrivateKey(Path.of(props.getPrivateKeyPath()));
         PublicKey publicKey = loadPublicKey(Path.of(props.getPublicKeyPath()));
+        // F26 fix: phát hiện cấu hình lệch cặp key (private/public không khớp) ngay khi khởi động —
+        // ký probe bằng private rồi verify bằng public; lệch thì service dừng, không chạy với key sai.
+        verifyKeyPair(privateKey, publicKey);
         this.signer = new RSASSASigner(privateKey);
         this.verifier = new RSASSAVerifier((java.security.interfaces.RSAPublicKey) publicKey);
     }
@@ -168,6 +171,23 @@ public class JwtService {
 
     public long getExpiresInSeconds() {
         return expiresInSeconds;
+    }
+
+    /** F26 — kiểm tra cặp key cấu hình thật sự khớp: ký probe RS256 bằng private, verify bằng public. */
+    static void verifyKeyPair(PrivateKey privateKey, PublicKey publicKey) {
+        try {
+            JWSObject probe = new JWSObject(
+                    new JWSHeader(JWSAlgorithm.RS256),
+                    new Payload(Map.of("probe", "keypair-check")));
+            probe.sign(new RSASSASigner(privateKey));
+            if (!probe.verify(new RSASSAVerifier((java.security.interfaces.RSAPublicKey) publicKey))) {
+                throw new IllegalStateException(
+                        "JWT key pair mismatch: public key does not match private key.");
+            }
+        } catch (JOSEException e) {
+            throw new IllegalStateException(
+                    "JWT key pair mismatch: cannot sign/verify probe with configured keys.", e);
+        }
     }
 
     /** Public để các service khác (T07+) tải public key verify; private key không bao giờ rời identity-service. */

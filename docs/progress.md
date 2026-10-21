@@ -442,3 +442,42 @@ T07-6..T07-10 + T07-14 đánh dấu `[x]` kèm bằng chứng. Còn mở: T07-11
 
 ### Trạng thái FIX_LIST
 T09-1..6, T10-1..5, T11-1..3, T12-1..5, T12-7 đánh dấu `[x]` kèm bằng chứng. **T12-6 (N28) vẫn mở** — trì hoãn sang phase 8 sau khi chốt T05-10.
+
+## Lượt 2026-10-22 — FIX_LIST T01–T12: Phase 6 (infra/scripts)
+
+### Việc đã làm
+- **T03-1 (F27):** `infra/postgres/init/01-create-databases.sh` viết lại — password truyền qua `psql -v VAR=...` + `:'VAR'`, không còn nội suy chuỗi mật khẩu vào SQL literal. Kiểm chứng: container `postgres:17.11-alpine` dùng 1 lần, 5 password chứa `'`, `"`, `$`, khoảng trắng → "T03: 5 DB + 5 users created", cả 5 login service trả về 1.
+- **T03-2 (N09):** bỏ dev default `spring.datasource.password` khỏi cả 5 `application.yml`; thêm `RequiredDbPasswordValidator.java` (`@Component` implements `BeanFactoryPostProcessor`) vào package config của từng service — fail-fast trước khi tạo DataSource: kiểm tra env `<VAR>_DB_PASSWORD`, nếu không có thì giá trị resolved `spring.datasource.password` (test đặt trực tiếp nên pass), thiếu → `IllegalStateException("Missing required environment variable 'X_DB_PASSWORD'...")`. Kiểm chứng: `env -u IDENTITY_DB_PASSWORD java -jar identity-service-0.1.0.jar` → exit 1, log nêu tên biến, không in giá trị; full `mvnw clean verify` xanh.
+- **T03-3 (N18):** healthcheck postgres = `pg_isready -q -h 127.0.0.1 -U $${POSTGRES_USER} && PGPASSWORD=$$PAYMENT_DB_PASSWORD psql ... -d payment_db -c 'select 1'`. Kiểm chứng: fresh `down -v` → `up -d` healthy, init log "T03: 5 DB + 5 users created".
+- **T03-4 (F32):** pin tag mọi nơi: `postgres:17.11-alpine`, `rabbitmq:3.13.7-management-alpine` (khớp framing records sao chép từ 3.13.7; xác minh bằng `docker exec ridehailing-rabbitmq rabbitmqctl version` = 3.13.7), `nginx:1.27.5-alpine`. Cập nhật compose.yaml (kể cả service topo-declare mới) + cả 7 class Testcontainers.
+- **T04-1 (F28):** `infra/rabbitmq/declare_topology.es` — không parse AMQP URI; build record `#amqp_params_network{username, password, host}` trực tiếp từ env (+ định nghĩa `-record(amqp_params_network,...)` sao chép nguyên văn từ `amqp_client-3.13.7/include/amqp_client.hrl`; helper `env_binary(Name)` = `list_to_binary`). Kiểm chứng: broker với user `u#x`, password `p@ss:w/ord#` → "T04: topology declared over AMQP", 6 durable queues được liệt kê.
+- **T04-2 (F29):** `infra/rabbitmq/declare-topology.sh` — parser `load_dotenv()` an toàn (chỉ KEY=VALUE, không execute shell; bỏ CRLF, skip comment/trống, trim khoảng trắng key, strip 1 cặp quote bao quanh). Kiểm chứng với `.env` tạm: giá trị có khoảng trắng không quote, `#`, giá trị trong quote, dòng CRLF.
+- **T04-3 (N15 topology):** service compose one-shot mới `topo-declare` (`rabbitmq:3.13.7-management-alpine`, `command: escript /topo/declare_topology.es`, `depends_on: rabbitmq condition: service_healthy`, `restart: "no"`, env RABBITMQ_USER/PASS + **RABBITMQ_HOST: rabbitmq**, volume `../infra/rabbitmq:/topo:ro`). README cập nhật (auto-declare mỗi lần `up -d`; script thủ công = fallback; `--force-recreate topo-declare` nếu broker data bị xóa khi đang chạy). Kiểm chứng end-to-end sau khi sửa 2 bug thật tìm thấy lúc verify (xem ghi chú kỹ thuật).
+- **F25/C05:** `.gitattributes` (`* text=auto eol=lf`, `*.cmd`/`*.bat` crlf); chuẩn hóa 163 file CRLF → LF (chỉ `mvnw.cmd` giữ CRLF — grep verify); `"engines": {"node": "24.x"}` trong `src/web/package.json`; `.nvmrc` = `24.18.0`. Kiểm chứng: không còn CRLF ngoài mvnw.cmd; `generate-dev-keys.sh` chạy end-to-end trên Linux qua `docker run ubuntu:24.04` (openssl cài trong container) → "Keys already exist", exit 0.
+- **F26:** `scripts/generate-dev-keys.sh` — nếu private tồn tại nhưng public thiếu → regenerate public từ cùng private (`openssl pkey -pubout`), không bao giờ ghi đè private có sẵn trừ khi `--force`. Thêm `JwtService.verifyKeyPair(privateKey, publicKey)` static trong identity-service — sign payload probe RS256 bằng private, verify qua `probe.verify(new RSASSAVerifier((RSAPublicKey) publicKey))`; mismatch → `IllegalStateException("JWT key pair mismatch...")` khi khởi động. Test mới `JwtServiceKeyPairCheckTest`. Kiểm chứng: phần script (xóa public thật, regenerate byte-identical theo cmp+sha256, fingerprint private không đổi); kiểm tra JwtService chạy qua mvnw verify — 2/2 pass.
+- **N14:** service nginx có `extra_hosts: ["host.docker.internal:host-gateway"]`. Kiểm chứng: `curl http://localhost:8080/api/drivers` → 502; log nginx cho thấy upstream `http://192.168.65.254:8082/...` (IP host-gateway) với "Connection refused" — DNS resolve, proxy path hoạt động (service Java không chạy local nên 502 là đúng).
+- **N16:** `src/web/src/api/client.ts` — thêm exported `uuidV4Fallback()` + `newUuid()`; header dùng `newUuid()`. Test mới `src/web/src/api/uuid.test.ts` (3 cases). Kiểm chứng: `npm test` trong src/web → 16/16 pass (node v24.18.0).
+
+### Tests mới
+- `JwtServiceKeyPairCheckTest` ×2 (F26): keypair khớp → verify OK; public sai → IllegalStateException khi khởi động.
+- `uuid.test.ts` ×3 (N16): fallback UUID hợp lệ, không trùng trong 100 lần, header dùng cùng hàm.
+
+### Lệnh đã chạy và kết quả thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` (root, JDK 21) | **BUILD SUCCESS** — identity **27**, driver **98**, trip **55**, matching **8**, payment **8** = **196 tests / 0 failures/errors/skipped** |
+| `npm test` (src/web, node v24.18.0) | **16/16 pass** |
+| `docker compose down -v && docker compose up -d` | postgres healthy, rabbitmq healthy, nginx up; topo-declare exit 0 — auto-declare đủ 6 durable queues (3 inbox + 3 DLQ); init log "T03: 5 DB + 5 users created" |
+| `env -u IDENTITY_DB_PASSWORD java -jar identity-service-0.1.0.jar` | exit 1, log nêu tên `IDENTITY_DB_PASSWORD`, không in giá trị (N09 fail-fast) |
+
+### Ghi chú kỹ thuật
+- Spring Boot 4 **không** nạp `BeanFactoryPostProcessor` từ `META-INF/spring.factories` (verify javap trên spring-boot-4.1.1.jar — chỉ EnvironmentPostProcessor được nạp theo cách đó); bean BFP được instantiate bằng reflection **không DI** → dùng `@Component` BFP gọi `beanFactory.getBean(Environment.class)` trong `postProcessBeanFactory`. EnvironmentPostProcessor bị loại vì chạy trước test property sources (@SpringBootTest properties / @DynamicPropertySource) → làm hỏng 20 integration tests.
+- RabbitMQ image đặt env mặc định `RABBITMQ_HOST=false`; escript (erl_eval) trả atom `false` cho biến chưa set (không phải undefined — verify bằng probe script). Sửa: escript coi `false`/`undefined`/`""`/`"false"` = "dùng default rabbitmq", compose đặt `RABBITMQ_HOST: rabbitmq` explicit.
+- Race: healthcheck `rabbitmq-diagnostics ping` có thể pass trước khi AMQP listener 5672 nhận kết nối → topo-declare `{error,econnrefused}` sau fresh `down -v`. Sửa 2 chiều: healthcheck thêm `nc -z 127.0.0.1 5672` (busybox nc có sẵn trong image) + escript `start_with_retry/2` (30 × 2s) retry chỉ lỗi transient (`econnrefused`, `timeout`, `nxdomain`, `unknown_host`), fail fast với auth error.
+- Erlang trong image rabbitmq bị strip: không có `inet.app`/`inet_drv.so`; nhưng `gen_tcp:connect` hoạt động (NIF load on demand) và `inet:getaddr("rabbitmq", inet)` resolve bình thường — amqp_client 3.13.7 dùng `gethostaddr(Host)` → `inet:getaddr`.
+- Nimbus API: không có `RSASSAVerifier.verify(JWSObject)`; gọi đúng là `jwsObject.verify(new RSASSAVerifier(pubKey))`.
+- Tên env phải hoa (`IDENTITY_DB_PASSWORD`...) — bản heredoc đầu sinh prefix service thường, đã sửa bằng sed và verify lại.
+- Smoke tests (matching/payment SecuritySmokeTest) exclude DataSourceAutoConfiguration → thêm `spring.datasource.password=smoke_no_db` để thỏa validator mà không cần DB thật.
+
+### Trạng thái FIX_LIST
+T03-1..4, T04-1..3, C05/F25, F26, N14, N16 đánh dấu `[x]` kèm bằng chứng. Còn mở: **Phase 7** (frontend/nginx: F15–F19, N34, T08-3..8/16/17) và **Phase 8** (P3 còn lại: C04/C06, T06-1..4, T07-11..13, T05-7..12 gồm T05-10 — mở khóa T12-6/N28, Q01).

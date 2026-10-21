@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class ReservationRestartIntegrationTest {
     @Container
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17.11-alpine") // F32: pin patch, cùng tag với compose
             .withUsername("driver_restart").withPassword("driver_restart_pw");
 
     private ConfigurableApplicationContext start(Path publicKey) {

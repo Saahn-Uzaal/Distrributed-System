@@ -16,7 +16,32 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."   # về root repo (script nằm ở infra/rabbitmq/)
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
+# F29 fix: KHÔNG `source` .env (shell thực thi nội dung file — khác cách Compose đọc dotenv).
+# Parser đơn giản: chỉ nhận dòng KEY=VALUE, bỏ comment/trống, strip CRLF và cặp quote bao quanh
+# value (giống godotenv của Docker) — giá trị chứa khoảng trắng không quote vẫn đọc đúng.
+load_dotenv() {
+  local file="$1" line key val
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in ''|'#'*) continue ;; esac
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    # trim khoảng trắng quanh key (Compose cũng trim)
+    key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    # strip một cặp quote bao quanh value nếu có
+    if [ "${#val}" -ge 2 ]; then
+      case "$val" in
+        \"*\") val="${val:1:${#val}-2}" ;;
+        \'*\') val="${val:1:${#val}-2}" ;;
+      esac
+    fi
+    export "$key=$val"
+  done < "$file"
+}
+load_dotenv .env
 RABBITMQ_USER="${RABBITMQ_USER:?thiếu RABBITMQ_USER trong .env}"
 RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD:?thiếu RABBITMQ_PASSWORD trong .env}"
 
@@ -36,7 +61,7 @@ docker run --rm \
   -e ERL_LIBS=/opt/rabbitmq/plugins \
   --network ridehailing_net \
   -v "${TOPO_HOST}:/topo:ro" \
-  rabbitmq:3-management-alpine \
+  rabbitmq:3.13.7-management-alpine \
   escript /topo/declare_topology.es
 
 echo "T04 (+F02): topology declared — ride.events + ride.events.dlx, 3 inbox queues (trip.inbox bind matching.# + payment.#), 3 DLQs."

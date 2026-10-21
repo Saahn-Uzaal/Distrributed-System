@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class HeartbeatClockIntegrationTest {
 
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine")
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17.11-alpine") // F32: pin patch, cùng tag với compose
             .withUsername("heartbeat_test")
             .withPassword("heartbeat_test_pw");
 

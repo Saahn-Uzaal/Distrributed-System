@@ -71,11 +71,12 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
   - Sửa: sửa README cho đúng hiện trạng; thêm một mục "Lệch đặc tả có chủ đích" (JdbcTemplate thay JPA, lý do). Tạo OpenAPI (springdoc hoặc file `docs/openapi.yaml`) cho các endpoint đã có của T06/T09/T12.
   - Kiểm chứng: README khớp các POM; có OpenAPI cho Identity/Driver/Trip.
 
-- [ ] **C05 — N19 (P3): Line ending lẫn lộn, Node chưa pin**
+- [x] **C05 — N19 (P3): Line ending lẫn lộn, Node chưa pin**
   - Vị trí: root (thiếu `.gitattributes`); `src/web/package.json` (thiếu `engines`); không có `.nvmrc`.
   - Vấn đề: `pom.xml`, `nginx.conf`, `generate-dev-keys.sh` dùng CRLF, các file khác dùng LF. Đây là nguyên nhân gốc của F25. Spec §4 yêu cầu pin Node.
   - Sửa: thêm `.gitattributes` (`* text=auto eol=lf`, `*.cmd text eol=crlf`) rồi normalize; thêm `"engines": {"node": "24.x"}` và `.nvmrc` theo phiên bản đã dùng (đang là 24.18.0).
   - Kiểm chứng: `file scripts/*.sh infra/**/*.sh` không còn CRLF; `npm ci` báo lỗi khi sai phiên bản Node.
+  - ✅ Đã làm + kiểm chứng (Phase 6): thêm `.gitattributes` (`* text=auto eol=lf`, `*.cmd`/`*.bat` = crlf); normalize 163 file CRLF → LF (chỉ `mvnw.cmd` giữ CRLF — grep xác nhận không còn CRLF nào khác); `"engines": {"node": "24.x"}` trong `src/web/package.json` + `.nvmrc` = 24.18.0; `generate-dev-keys.sh` chạy end-to-end trên Linux qua `docker run ubuntu:24.04` (openssl cài in-container) → exit 0.
 
 - [ ] **C06 — N17 (P3): Không retry khi khởi động, chưa có liveness/readiness**
   - Vị trí: `*/config/FlywayConfig.java`; `*/application.yml` (5 service).
@@ -87,48 +88,55 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
 
 ## T03 — PostgreSQL
 
-- [ ] **T03-1 — F27 (P2): Mật khẩu DB nối thẳng vào SQL literal**
+- [x] **T03-1 — F27 (P2): Mật khẩu DB nối thẳng vào SQL literal**
   - Vị trí: `infra/postgres/init/01-create-databases.sh` dòng 8, 13, 18, 23, 28.
   - Vấn đề: mật khẩu có dấu `'` làm script init lỗi, volume đã khởi tạo nhưng thiếu DB/user.
   - Sửa: truyền qua biến psql và dùng quoting của psql: `psql -v pw="$IDENTITY_DB_PASSWORD" ...` với `CREATE USER identity_svc WITH PASSWORD :'pw';`. Không giới hạn ký tự mật khẩu để né lỗi.
   - Kiểm chứng: container disposable với mật khẩu chứa `'`, `"`, `$`, khoảng trắng → 5 user/DB được tạo, đăng nhập được.
+  - ✅ Đã làm + kiểm chứng (Phase 6): script viết lại bằng `psql -v VAR=...` + `:'VAR'`; container `postgres:17.11-alpine` disposable với 5 mật khẩu chứa `'`, `"`, `$`, khoảng trắng → "T03: 5 DB + 5 users created", cả 5 service login trả về 1.
 
-- [ ] **T03-2 — N09 (P3): Mật khẩu DB hard-code làm giá trị mặc định**
+- [x] **T03-2 — N09 (P3): Mật khẩu DB hard-code làm giá trị mặc định**
   - Vị trí: `*/src/main/resources/application.yml` (`${IDENTITY_DB_PASSWORD:identity_dev_2026}`…).
   - Vấn đề: thiếu env thì service âm thầm dùng mật khẩu mặc định. Trái spec §11 và §12.
   - Sửa: bỏ giá trị mặc định (`${IDENTITY_DB_PASSWORD}`), để service dừng với thông báo rõ khi thiếu env; cập nhật README cách nạp env khi chạy jar.
   - Kiểm chứng: chạy jar không set env → service dừng, log nêu tên biến thiếu (không in giá trị).
+  - ✅ Đã làm + kiểm chứng (Phase 6): bỏ default trong cả 5 `application.yml`; thêm `RequiredDbPasswordValidator` (BeanFactoryPostProcessor @Component x5) fail-fast trước khi tạo DataSource. Chạy `identity-service-0.1.0.jar` không set env → exit 1, log: "Missing required environment variable 'IDENTITY_DB_PASSWORD'" (không in giá trị). Test H2 probe/Testcontainers set password trực tiếp nên không bị chặn; `mvnw clean verify` xanh.
 
-- [ ] **T03-3 — N18 (P3): Healthcheck Postgres có thể báo healthy khi init chưa xong**
+- [x] **T03-3 — N18 (P3): Healthcheck Postgres có thể báo healthy khi init chưa xong**
   - Vị trí: `deploy/compose.yaml` healthcheck postgres.
   - Sửa: kiểm tra qua TCP và chính tài khoản service, ví dụ `pg_isready -h 127.0.0.1 -U $${POSTGRES_USER}` kết hợp `psql -h 127.0.0.1 ... -c 'select 1' -d payment_db` (DB tạo cuối cùng).
   - Kiểm chứng: xóa volume, `up -d`, theo dõi `docker inspect` → chỉ healthy sau khi log init in "5 DB + 5 users created".
+  - ✅ Đã làm + kiểm chứng (Phase 6): healthcheck = `pg_isready -U $${POSTGRES_USER}` && `PGPASSWORD=$$PAYMENT_DB_PASSWORD psql -U payment_svc -d payment_db -c 'select 1'`; sau `down -v` → `up -d`, `docker inspect` healthy và log init có dòng "T03: 5 DB + 5 users created".
 
-- [ ] **T03-4 — F32 (P3): Docker image tag trôi**
+- [x] **T03-4 — F32 (P3): Docker image tag trôi**
   - Vị trí: `deploy/compose.yaml` (postgres, rabbitmq, nginx); `infra/rabbitmq/declare-topology.sh`; tất cả `new PostgreSQLContainer("postgres:17-alpine")` trong test.
   - Vấn đề: `postgres:17-alpine`, `rabbitmq:3-management-alpine`, `nginx:1.27-alpine` đổi theo bản vá. Escript lại chép record từ RabbitMQ 3.13.7.
   - Sửa: pin phiên bản patch đầy đủ (tốt nhất kèm digest), cùng một tag cho Compose và Testcontainers; RabbitMQ pin đúng bản khớp với record đã chép (hoặc nâng bản và cập nhật record).
   - Kiểm chứng: `docker compose config` hiển thị tag đầy đủ; build/test vẫn pass.
+  - ✅ Đã làm + kiểm chứng (Phase 6): pin `postgres:17.11-alpine`, `rabbitmq:3.13.7-management-alpine` (khớp record framing chép trong escript — xác nhận bằng `rabbitmqctl version` = 3.13.7 trên broker đang chạy), `nginx:1.27.5-alpine`; cập nhật compose (kể cả service topo-declare mới) + cả 7 class Testcontainers; `docker compose config` hiển thị tag pin, `mvnw clean verify` xanh.
 
 ---
 
 ## T04 — RabbitMQ
 
-- [ ] **T04-1 — F28 (P2): Credential không percent-encode trong AMQP URI**
+- [x] **T04-1 — F28 (P2): Credential không percent-encode trong AMQP URI**
   - Vị trí: `infra/rabbitmq/declare_topology.es:31`.
   - Sửa: không dựng URI; tạo record `#amqp_params_network{username=…, password=…, host="rabbitmq"}` trực tiếp từ env (hoặc percent-encode user/pass).
   - Kiểm chứng: mật khẩu có `#`, `@`, `:`, `/` → declare thành công.
+  - ✅ Đã làm + kiểm chứng (Phase 6): escript không parse URI — dựng record `#amqp_params_network{}` trực tiếp từ env (+ helper `env_binary`; record definition chép từ amqp_client.hrl). Broker test với user `u#x`, password `p@ss:w/ord#` → "T04: topology declared over AMQP"; 6 queue durable hiện trong rabbitmqctl. (Phase 6 bổ sung: xử lý `RABBITMQ_HOST=false` mặc định của image + retry transient — xem T04-3.)
 
-- [ ] **T04-2 — F29 (P2): Script `source .env` khác cách Compose đọc dotenv**
+- [x] **T04-2 — F29 (P2): Script `source .env` khác cách Compose đọc dotenv**
   - Vị trí: `infra/rabbitmq/declare-topology.sh:16`.
   - Sửa: không `source`; đọc giá trị qua `docker compose --env-file .env -f deploy/compose.yaml config` hoặc parser dotenv đơn giản (chỉ `KEY=VALUE`, không thực thi). Hoặc truyền `--env-file .env` cho `docker run`.
   - Kiểm chứng: `.env` có mật khẩu chứa khoảng trắng không quote (Compose chấp nhận) → script vẫn declare được.
+  - ✅ Đã làm + kiểm chứng (Phase 6): `load_dotenv()` parser KEY=VALUE thuần bash (không thực thi shell; bỏ CRLF, skip comment/trống, trim key, strip một cặp quote). Kiểm chứng bằng source hàm với `.env` tạm chứa giá trị không quote có khoảng trắng, `#`, quoted value, dòng CRLF → parse đúng.
 
-- [ ] **T04-3 — N15 phần topology (P2): Topology chỉ khai báo bằng script chạy tay**
+- [x] **T04-3 — N15 phần topology (P2): Topology chỉ khai báo bằng script chạy tay**
   - Vị trí: `infra/rabbitmq/*`; README bước 2.
   - Vấn đề: reset volume broker mà quên chạy script thì service không có exchange/queue. Nếu exchange có nhưng thiếu binding, publish với confirms vẫn được broker ack và message bị bỏ.
   - Sửa (phần T04): ghi rõ trong README/compose rằng script là bắt buộc sau mỗi lần reset; thêm bước chạy script tự động (service one-shot trong Compose, `depends_on` rabbitmq healthy). Phần contract (`mandatory` + returns) xem T05-2.
   - Kiểm chứng: `docker compose down -v && up -d` → queue và binding tồn tại mà không cần chạy tay.
+  - ✅ Đã làm + kiểm chứng (Phase 6): service one-shot `topo-declare` trong compose (`rabbitmq:3.13.7-management-alpine`, `depends_on: rabbitmq condition: service_healthy`, `restart: "no"`). Phát hiện và sửa 2 bug khi verify thật: (1) image rabbitmq mặc định đặt env `RABBITMQ_HOST=false` → escript fallback sai host; (2) healthcheck ping pass trước khi listener AMQP sẵn sàng → thêm `nc -z 127.0.0.1 5672` vào healthcheck + retry transient trong escript. Sau `down -v` → `up -d`: topo-declare exit 0, log "T04: topology declared over AMQP (host=rabbitmq)", cả 6 queue durable (matching/trip/payment inbox + dlq) tồn tại không chạy script tay.
 
 ---
 
@@ -203,15 +211,17 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Sửa: từ chối ký tự điều khiển (`\p{Cc}`, đặc biệt `\u0000`) trong mọi field text → 400 `INVALID_INPUT`.
   - Kiểm chứng: test register với `"fullName":"ab\u0000c"` → 400, DB không đổi; tương tự cho driver profile.
 
-- [ ] **T06-2 — F25 (P2): `generate-dev-keys.sh` dùng CRLF**
+- [x] **T06-2 — F25 (P2): `generate-dev-keys.sh` dùng CRLF**
   - Vị trí: `scripts/generate-dev-keys.sh` (toàn file).
   - Sửa: chuyển sang LF (kèm C05 `.gitattributes`).
   - Kiểm chứng: `docker run --rm -v "$PWD:/w" -w /w bash:5 bash scripts/generate-dev-keys.sh` chạy được trên Linux.
+  - ✅ Đã làm + kiểm chứng (Phase 6): file chuyển sang LF (kèm C05); chạy end-to-end trên Linux qua container `ubuntu:24.04` → "Keys already exist", exit 0.
 
-- [ ] **T06-3 — F26 (P2): Thiếu public key nhưng còn private → script tạo private mới**
+- [x] **T06-3 — F26 (P2): Thiếu public key nhưng còn private → script tạo private mới**
   - Vị trí: `scripts/generate-dev-keys.sh:20,25`.
   - Sửa: nếu private có mà public thiếu thì tạo lại public từ private (`openssl pkey -in priv -pubout`); chỉ tạo private mới khi có `--force`. Thêm kiểm tra cặp key khớp lúc khởi động Identity (ký thử rồi verify) để phát hiện cấu hình lệch.
   - Kiểm chứng: xóa public, chạy script → fingerprint private không đổi; token cũ vẫn verify được.
+  - ✅ Đã làm + kiểm chứng (Phase 6): script tạo lại public từ private (`openssl pkey -pubout`) khi public thiếu, không ghi đè private trừ `--force`; `JwtService` thêm `verifyKeyPair()` lúc khởi động (ký probe RS256 bằng private, verify bằng public; lệch → IllegalStateException). Kiểm chứng: xóa `keys/jwt-public.pem`, chạy script → public tái tạo byte-identical với backup (cmp + sha256), fingerprint private không đổi. Test `JwtServiceKeyPairCheckTest` 2/2 trong `mvnw clean verify`.
 
 - [ ] **T06-4 — R03 (P3): Login bỏ qua BCrypt khi email không tồn tại**
   - Vị trí: `identity-service/.../service/UserService.java:78–80`.
@@ -355,16 +365,18 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Sửa: `map $http_x_correlation_id $cid { "~^[0-9a-fA-F-]{36}$" $http_x_correlation_id; default $request_id_uuid; }` (định dạng `$request_id` thành dạng UUID hoặc để service tự sinh và ghi rõ trong contract §5.2); `proxy_set_header X-Correlation-ID $cid;` và thêm `$cid` vào `log_format`.
   - Kiểm chứng: request không gửi header → access log của Nginx và log của service có cùng ID.
 
-- [ ] **T08-9 — N14 (P2): `host.docker.internal` không tồn tại trên Docker Engine Linux**
+- [x] **T08-9 — N14 (P2): `host.docker.internal` không tồn tại trên Docker Engine Linux**
   - Vị trí: `deploy/compose.yaml` service nginx.
   - Sửa: thêm `extra_hosts: ["host.docker.internal:host-gateway"]`.
   - Kiểm chứng: `docker compose up nginx` trên Linux (WSL Docker Engine hoặc VM) → container chạy.
+  - ✅ Đã làm + kiểm chứng (Phase 6): thêm `extra_hosts: ["host.docker.internal:host-gateway"]` cho service nginx; sau `up -d`, `curl http://localhost:8080/api/drivers` → 502 và log nginx ghi upstream `http://192.168.65.254:8082/...` (host-gateway) với "Connection refused" — DNS resolve đúng, proxy tới host hoạt động (services Java chưa chạy local nên 502 là kỳ vọng).
 
-- [ ] **T08-10 — N16 (P2): `crypto.randomUUID()` chỉ có trong secure context**
+- [x] **T08-10 — N16 (P2): `crypto.randomUUID()` chỉ có trong secure context**
   - Vị trí: `src/web/src/api/client.ts:30`.
   - Vấn đề: mở `http://<IP>:8080` từ máy khác → mọi API call ném TypeError → không đăng nhập được.
   - Sửa: hàm `newUuid()` dùng `crypto.randomUUID` nếu có, nếu không thì dựng UUID v4 từ `crypto.getRandomValues` (có cả ở HTTP thường).
   - Kiểm chứng: unit test giả lập không có `randomUUID`; mở bằng IP LAN và đăng nhập được.
+  - ✅ Đã làm + kiểm chứng (Phase 6): `uuidV4Fallback()` (UUID v4 từ `crypto.getRandomValues`, set version/variant bits) + `newUuid()` trong `src/web/src/api/client.ts`; test mới `src/api/uuid.test.ts` (3 cases: UUID hợp lệ ở secure context, 1000 UUID fallback unique khớp regex v4, giả lập non-secure context). `npm test`: 16/16 pass.
 
 - [ ] **T08-11 — F15 (P2): 401 muộn của token cũ xóa phiên mới**
   - Vị trí: `src/web/src/api/client.ts:57–58`.

@@ -355,3 +355,16 @@ T11 DONE, R01–R07 đã xử lý. Chi tiết: [T11](tasks/T11.md), [nhật ký 
 ### Ghi chú kỹ thuật
 - Boot 4: MVC request binding dùng JsonMapper auto-config (`JacksonAutoConfiguration` + `JsonMapperBuilderCustomizer`) — custom @Bean ObjectMapper không áp dụng cho binding (đã verify javap trên jar local).
 - Docker Desktop Windows: `host.docker.internal` reach được process bind loopback (khác Linux) → dev-mode nginx proxy hoạt động với `SERVER_ADDRESS=127.0.0.1`.
+
+## Lượt 2026-10-21 — FIX_LIST T01–T12: Phase 3 (contract T05 + mã lỗi F04)
+
+Docs-only, theo thứ tự khuyến nghị của FIX_LIST ("chốt N15, N21–N24, F31 trước khi bắt đầu T13"):
+- **T05-1 (F31):** chọn hướng (a) — bỏ "publish event hủy matching" (event không tồn tại trong catalog); trip terminal → event attempt cũ bị bỏ qua ACK+log. Cập nhật api-contracts §3.3, state-machines row SEARCHING→CANCELLED, events.md §3.2 note.
+- **T05-2 (N15 contract):** publisher `mandatory=true` + ReturnsCallback; message returned → outbox giữ PENDING + `last_error`, không SENT; service declare topology khi khởi động, script chỉ phụ trợ (events.md §1/§4).
+- **T05-3 (N21):** transition `SEARCHING→SEARCHING` cụ thể: NoDriverFound/hết candidate còn lượt → attempt+1, `next_retry_at = now + MATCHING_RETRY_DELAY_MS` (env mới, default 5000), outbox TripRequested attempt mới; excluded list giữ nguyên với NoDriverFound; hết attempts/deadline → NO_DRIVER.
+- **T05-4 (N22):** chốt ghi `trips.driver_id`/`driver_user_id` khi DRIVER_OFFERED, xóa NULL khi reject/expire; invariant 2 = "assignment hiệu lực" từ ACCEPTED (state-machines §6, api-contracts §3.3, handoff dòng T16).
+- **T05-5 (N23):** malformed/unsupported → republish sang DLQ kèm `x-dlq-reason` rồi ACK gốc; reject(requeue=false) chỉ sau hết retry transient (chỉ mang x-death) — events.md §2/§4.3/§6.
+- **T05-6 (N24):** Trip phải release mọi reservationId đã cấp mà bỏ (kể cả sau 409/timeout); không tái dùng commandId; command lỗi không lưu replay — api-contracts §4.1 + state-machines §2.
+- **F04 → contract:** thêm `METHOD_NOT_ALLOWED` (405) và `UNSUPPORTED_MEDIA_TYPE` (415) vào bảng mã lỗi api-contracts §1.2.
+
+Kiểm chứng: 3 tài liệu contract nhất quán (đọc lại sau sửa); không thay đổi code/test — `clean verify` không bị ảnh hưởng (docs-only).

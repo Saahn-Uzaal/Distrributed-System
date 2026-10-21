@@ -1,6 +1,6 @@
 # API Contracts — DS03 Ride-Hailing Microservices
 
-Trạng thái: **CHỐT** (2026-10-18, task T05). Đây là nguồn sự thật duy nhất cho contract REST. Mọi thay đổi sau này phải đi qua một task riêng và cập nhật file này trước khi code. Tài liệu này **chưa kèm code handler** — các task T06+ implement đúng theo đây.
+Trạng thái: **CHỐT** (2026-10-18, task T05; cập nhật 2026-10-21 đợt sửa FIX_LIST: F31 bỏ "event hủy matching", N22 thời điểm ghi `trips.driver_id`, N24 release mọi reservationId bị bỏ, thêm mã lỗi 405/415). Đây là nguồn sự thật duy nhất cho contract REST. Mọi thay đổi sau này phải đi qua một task riêng và cập nhật file này trước khi code.
 
 Nguồn yêu cầu: spec DS03 mục 8 (REST), mục 9 (event — xem `events.md`), mục 10–11 (saga, security). Đề môn học: COURSE PROJECT SPECIFICATION §7.
 
@@ -53,7 +53,9 @@ Không bao giờ trả stack trace. `details` tùy chọn (object hoặc array).
 | 409 | `STALE_VERSION` | `commandVersion` ≤ version đã lưu (internal) |
 | 409 | `DRIVER_NOT_AVAILABLE` | Reserve khi driver không AVAILABLE/heartbeat stale (internal) |
 | 409 | `TOMBSTONED_RESERVATION` | Reserve tới sau release cho cùng reservationId (internal) |
+| 405 | `METHOD_NOT_ALLOWED` | HTTP method không được hỗ trợ cho endpoint (vd DELETE trên endpoint POST-only) |
 | 413 | `PAYLOAD_TOO_LARGE` | Body > 64 KiB |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type` request không phải `application/json` |
 | 500 | `INTERNAL_ERROR` | Lỗi không mong đợi; log đầy đủ phía server, client chỉ nhận code chung |
 
 ### 1.3. Phân trang (mọi list endpoint)
@@ -181,8 +183,9 @@ Body giống quote.
 - Thiếu key / key sai định dạng UUID: 400 `INVALID_INPUT`.
 
 #### GET /api/trips (authenticated, phân trang §1.3)
-Passenger thấy chuyến của mình; driver thấy chuyến đã assign cho mình.
+Passenger thấy chuyến của mình; driver thấy chuyến đang offer/assign cho mình.
 - **Sửa R02:** driverId là profile ID; JWT sub là identity user ID. Trip lưu `driver_user_id` từ `driverUserId` trong candidate/proposal để kiểm tra quyền. `driver_id` và `driver_user_id` cùng null hoặc cùng có giá trị. Không so trực tiếp driverId với JWT sub, không đọc Driver DB từ Trip.
+- **Chốt N22:** `trips.driver_id`/`driver_user_id` ghi khi trip chuyển sang `DRIVER_OFFERED` (để driver được offer xem được trip), xóa về NULL khi reject/expire; assignment hiệu lực chỉ từ ACCEPTED (state-machines.md §6 invariant 2).
 `content[]`:
 ```json
 {"tripId":"uuid","state":"SEARCHING","pickup":{"latitude":10.7769,"longitude":106.7009},"destination":{"latitude":10.8000,"longitude":106.7200},"distanceM":3316,"fareVnd":32000,"paymentStatus":"NOT_REQUESTED","createdAt":"...Z"}
@@ -216,7 +219,7 @@ Passenger thấy chuyến của mình; driver thấy chuyến đã assign cho m�
 
 #### POST /api/trips/{id}/cancel (owner = passenger)
 Không có body. Chốt hai nhánh:
-- Chưa có reservation hoạt động/đang xử lý (state `SEARCHING`, saga không pending reserve): **200** `{"tripId":"...","state":"CANCELLED"}` — saga ABORTED ngay, publish event hủy matching nếu đang chạy.
+- Chưa có reservation hoạt động/đang xử lý (state `SEARCHING`, saga không pending reserve): **200** `{"tripId":"...","state":"CANCELLED"}` — saga ABORTED ngay. **Không publish event "hủy matching"** (event này không tồn tại trong catalog — chốt F31); event `DriverProposed`/`NoDriverFound` attempt cũ tới sau đó bị bỏ qua: ACK + log theo events.md §4.4.
 - Có reservation pending/hoạt động (`DRIVER_OFFERED` hoặc đang RESERVING): **202** `{"tripId":"...","state":"CANCELLING"}` — saga phase `COMPENSATING`, worker release rồi mới chuyển `CANCELLED`; client poll `GET /trips/{id}`.
 - Sau khi accept thắng (`ACCEPTED`/`IN_PROGRESS`/`COMPLETED`) hoặc đã terminal: 409 `STATE_CONFLICT`.
 
@@ -281,6 +284,7 @@ Mỗi command body mang:
 - **Sửa R06:** commandVersion hợp lệ trong `[1, 2147483647]`; ngoài khoảng → 400 trước mọi ghi DB. INT được dùng nhất quán, không cast long ngoài miền.
 - **Chốt T10 — thứ tự kiểm tra reserve:** (1) dedup commandId (replay/conflict) → (2) tombstone: reservation đã terminal (`RELEASED`/`EXPIRED`) → 409 `TOMBSTONED_RESERVATION` → (3) version check → (4) CAS driver. Replay được kiểm tra **trước** tombstone: retry command gốc sau release trả response đã lưu, Trip reconcile trạng thái thật bằng GET.
 - `commandVersion`: mỗi reservation có `last_command_version` (khởi tạo 0). Command được chấp nhận khi `commandVersion > last_command_version`; sau đó lưu giá trị lớn nhất. Ngược lại → 409 `STALE_VERSION`. Không dùng timestamp để suy luận thứ tự.
+- **Chốt N24 — release mọi reservationId bị bỏ:** Trip **phải** gửi `release` (tạo tombstone nếu release tới trước) cho mọi `reservationId` đã cấp mà không dùng nữa — kể cả sau khi nhận 409/timeout HTTP; chỉ coi cleanup xong khi có xác nhận terminal. Không tái dùng `commandId` cho thao tác khác; command lỗi (4xx/5xx/timeout) **không được lưu** để replay.
 
 ### 4.2. driver-service — candidates & reservations
 
@@ -359,6 +363,7 @@ Sau khi trip COMPLETED: chỉ từ state `CONFIRMED` (khớp tripId) → termina
 | `HEARTBEAT_STALE_AFTER_MS` | 15000 | Heartbeat cũ hơn → không chọn cho chuyến mới |
 | `MATCHING_MAX_CANDIDATES` | 5 | Số ứng viên mỗi lần đề nghị |
 | `MAX_MATCHING_ATTEMPTS` | 3 | Số lần matching tối đa mỗi trip |
+| `MATCHING_RETRY_DELAY_MS` | 5000 | Delay trước attempt matching kế tiếp sau NoDriverFound/hết candidate (chốt N21) |
 | `TRIP_MATCH_DEADLINE_SECONDS` | 120 | Deadline tổng tìm tài xế → NO_DRIVER |
 | `JWT_EXPIRES_IN_SECONDS` | 3600 | Thời hạn JWT |
 

@@ -136,33 +136,39 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
 
 Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục dưới đây là chỗ contract còn thiếu hoặc mâu thuẫn; chỉ cần sửa tài liệu, chưa cần code.
 
-- [ ] **T05-1 — F31 (P2): Cancel yêu cầu "publish event hủy matching" nhưng event không tồn tại**
+- [x] **T05-1 — F31 (P2): Cancel yêu cầu "publish event hủy matching" nhưng event không tồn tại**
   - Vị trí: `docs/api-contracts.md:219`; `docs/events.md` §3; CHECK `event_type` trong `trip-service/.../V2__trips.sql`.
   - Sửa: chọn một trong hai hướng và ghi rõ. (a) Bỏ câu "publish event hủy"; Trip bỏ qua `DriverProposed`/`NoDriverFound` tới sau khi trip đã terminal (ACK + log). (b) Thêm event `TripCancelled` (routing key, payload, binding `matching.inbox`, consumer) và migration mở rộng CHECK. Hướng (a) gọn hơn cho MVP.
   - Kiểm chứng: api-contracts, events và state-machines nói cùng một điều.
+  - ✅ Đã làm (2026-10-21): chọn hướng (a) — bỏ câu "publish event hủy" ở api-contracts §3.3 cancel; state-machines row `SEARCHING→CANCELLED` ghi rõ không publish, event attempt cũ bị bỏ qua ACK+log theo events.md §4.4; events.md §3.2 thêm note không có event "hủy matching" trong catalog. Ba tài liệu nói cùng một điều.
 
-- [ ] **T05-2 — N15 phần contract (P2): Thiếu quy tắc `mandatory` + returns cho publisher**
+- [x] **T05-2 — N15 phần contract (P2): Thiếu quy tắc `mandatory` + returns cho publisher**
   - Vị trí: `docs/events.md` §1 và §4.6.
   - Sửa: thêm quy tắc publisher dùng `mandatory=true` + ReturnsCallback; message bị trả về thì outbox giữ PENDING và ghi `last_error`, không đánh dấu SENT. Service tự declare topology khi khởi động (Spring AMQP `Declarables`), script chỉ còn là công cụ phụ.
   - Kiểm chứng: tài liệu nêu rõ hành vi khi gặp message không route được.
+  - ✅ Đã làm (2026-10-21): events.md §1 thêm quy tắc publisher `mandatory=true` + ReturnsCallback; message returned → outbox giữ PENDING + ghi `last_error`, không đánh dấu SENT, retry vòng quét kế tiếp; service declare topology khi khởi động (Spring AMQP declarables), script chỉ là công cụ phụ. §4 rule 6 cập nhật tương ứng.
 
-- [ ] **T05-3 — N21 (P2): Chưa định nghĩa hành vi khi NoDriverFound hoặc hết candidate mà còn lượt attempt**
+- [x] **T05-3 — N21 (P2): Chưa định nghĩa hành vi khi NoDriverFound hoặc hết candidate mà còn lượt attempt**
   - Vị trí: `docs/state-machines.md` §1–2; `docs/events.md` §3.2–3.3.
   - Sửa: thêm transition `SEARCHING → SEARCHING` với điều kiện cụ thể, ví dụ: nhận NoDriverFound hoặc hết candidate → attempt+1, `next_retry_at = now + MATCHING_RETRY_DELAY` (env, ví dụ 5 s), phát `TripRequested` attempt mới qua outbox, dừng khi attempt > `MAX_MATCHING_ATTEMPTS` hoặc quá deadline → NO_DRIVER. Ghi rõ excluded list có giữ hay không với NoDriverFound.
   - Kiểm chứng: không còn nhánh "do Saga điều khiển" mà không nêu cụ thể.
+  - ✅ Đã làm (2026-10-21): state-machines.md §1 thêm row `SEARCHING→SEARCHING`: NoDriverFound đúng attempt hoặc hết candidate chưa giữ chỗ → attempt+1, `next_retry_at = now + MATCHING_RETRY_DELAY_MS` (env default 5000 ms), outbox TripRequested attempt mới, excluded list giữ nguyên với NoDriverFound; dừng khi attempt > MAX_MATCHING_ATTEMPTS hoặc quá deadline → NO_DRIVER. events.md §3.2/§3.3 cập nhật cùng hành vi; api-contracts §6 thêm env `MATCHING_RETRY_DELAY_MS`.
 
-- [ ] **T05-4 — N22 (P3): Mâu thuẫn về thời điểm ghi `trips.driver_id`**
+- [x] **T05-4 — N22 (P3): Mâu thuẫn về thời điểm ghi `trips.driver_id`**
   - Vị trí: `docs/state-machines.md` §6 invariant 2 ("set khi ACCEPTED"); `docs/api-contracts.md` §3.3 (ví dụ DRIVER_OFFERED có `driverId`); `docs/handoff.md`.
   - Sửa: chốt một cách. Gợi ý: ghi `driver_id`/`driver_user_id` khi DRIVER_OFFERED để driver được offer xem được trip, xóa về NULL khi reject/expire; invariant 2 diễn đạt lại theo "assignment hiệu lực". Cập nhật cả ba tài liệu.
+  - ✅ Đã làm (2026-10-21): chốt ghi `trips.driver_id`/`driver_user_id` khi `DRIVER_OFFERED`, xóa về NULL khi reject/expire; invariant 2 diễn đạt lại theo "assignment hiệu lực" (từ ACCEPTED). Cập nhật: state-machines.md §6 + row DRIVER_OFFERED→SEARCHING, api-contracts.md §3.3 (list + detail), handoff.md dòng T16.
 
-- [ ] **T05-5 — N23 (P3): `x-dlq-reason` không thể thêm khi reject message**
+- [x] **T05-5 — N23 (P3): `x-dlq-reason` không thể thêm khi reject message**
   - Vị trí: `docs/events.md` §2 và §6.
   - Sửa: ghi rõ consumer gặp event malformed hoặc unsupported thì **republish** sang `ride.events.dlx` (routing key = tên DLQ) kèm header `x-dlq-reason`, rồi ACK message gốc. Lỗi transient hết retry mới dùng `reject(requeue=false)` (lúc đó chỉ có `x-death`).
+  - ✅ Đã làm (2026-10-21): events.md §2 — consumer gặp malformed/unsupported → **republish** sang `ride.events.dlx` với routing key = tên DLQ + header `x-dlq-reason`, rồi ACK message gốc; ghi rõ không dùng reject cho trường hợp này (broker chỉ thêm được x-death). §4 rule 3 và §6 cập nhật hai đường vào DLQ.
 
-- [ ] **T05-6 — N24 (P3): Thiếu quy tắc release mọi reservationId bị bỏ**
+- [x] **T05-6 — N24 (P3): Thiếu quy tắc release mọi reservationId bị bỏ**
   - Vị trí: `docs/api-contracts.md` §4.1; `docs/state-machines.md` §2.
   - Vấn đề: Driver chỉ lưu response của command thành công. Cùng `commandId` có thể nhận 409 lần đầu và 201 lần sau, nên retry trễ có thể giữ chỗ cho reservation Trip đã bỏ.
   - Sửa: ghi quy tắc: Trip **phải** gửi release (tạo tombstone) cho mọi `reservationId` đã cấp mà không dùng nữa, kể cả sau khi nhận 409/timeout; không tái dùng `commandId` cho thao tác khác. Ghi rõ command lỗi không được lưu để replay.
+  - ✅ Đã làm (2026-10-21): api-contracts.md §4.1 thêm chốt N24 — Trip phải gửi release (tombstone nếu tới trước) cho mọi reservationId đã cấp mà bỏ, kể cả sau 409/timeout; không tái dùng commandId cho thao tác khác; command lỗi không lưu để replay. state-machines.md §2 quy tắc worker cập nhật tương ứng.
 
 - [ ] **T05-7 — N25 (P3): Chưa có cơ chế kích hoạt retry thanh toán**
   - Vị trí: `docs/state-machines.md` §5; `docs/api-contracts.md` §3.

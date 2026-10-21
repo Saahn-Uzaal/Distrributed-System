@@ -1,6 +1,6 @@
 # State Machines — DS03 Ride-Hailing
 
-Trạng thái: **CHỐT** (2026-10-18, task T05). Nguồn sự thật cho mọi transition guard trong code. Chốt thêm 2 cột schema so với spec §7: `reservations.terminal_reason` và `sagas.context` (+ `trips.payment_attempt`) — ghi rõ ở từng mục.
+Trạng thái: **CHỐT** (2026-10-18, task T05; cập nhật 2026-10-21 đợt sửa FIX_LIST: N21 transition SEARCHING→SEARCHING, N22 thời điểm ghi `trips.driver_id`, N24 release mọi reservationId bị bỏ). Nguồn sự thật cho mọi transition guard trong code. Chốt thêm 2 cột schema so với spec §7: `reservations.terminal_reason` và `sagas.context` (+ `trips.payment_attempt`) — ghi rõ ở từng mục.
 
 ## 1. Trip state machine (trip-service)
 
@@ -31,9 +31,10 @@ States: `SEARCHING`, `DRIVER_OFFERED`, `CANCELLING` *(transient)*, `ACCEPTED`, `
 |---|---|---|---|
 | – | `SEARCHING` | `POST /api/trips` (idempotent key OK) | Saga `WAITING_MATCH`; outbox `TripRequested` attempt 1; trip_event `TRIP_CREATED`; notification passenger |
 | `SEARCHING` | `DRIVER_OFFERED` | Consume `DriverProposed` đúng attempt + reserve thành công (reservationId đã lưu trước khi gọi) | Saga `WAITING_DRIVER`; trip_event `DRIVER_OFFERED`; notifications cả hai bên |
-| `DRIVER_OFFERED` | `SEARCHING` | Reject hoặc offer TTL hết hạn → release **xác nhận** (hoặc đọc được terminal), attempt < 3 | Saga `WAITING_MATCH` attempt+1, excludedDriverIds += driver; trip_event `OFFER_REJECTED`/`OFFER_EXPIRED` + `RESERVATION_RELEASED`; outbox `TripRequested` attempt mới. Phase chỉ chuyển sang `RESERVING_DRIVER` **sau khi** nhận `DriverProposed` đúng attempt (chốt F06); event attempt cũ bị bỏ qua theo events.md §4.4 |
+| `DRIVER_OFFERED` | `SEARCHING` | Reject hoặc offer TTL hết hạn → release **xác nhận** (hoặc đọc được terminal), attempt < 3 | Saga `WAITING_MATCH` attempt+1, excludedDriverIds += driver; xóa `trips.driver_id`/`driver_user_id` về NULL (chốt N22); trip_event `OFFER_REJECTED`/`OFFER_EXPIRED` + `RESERVATION_RELEASED`; outbox `TripRequested` attempt mới. Phase chỉ chuyển sang `RESERVING_DRIVER` **sau khi** nhận `DriverProposed` đúng attempt (chốt F06); event attempt cũ bị bỏ qua theo events.md §4.4 |
+| `SEARCHING` | `SEARCHING` | Consume `NoDriverFound` đúng attempt, hoặc `DriverProposed` mà hết danh sách candidate chưa giữ được chỗ — attempt < 3 và chưa quá deadline | Saga `WAITING_MATCH`: attempt+1, `next_retry_at = now + MATCHING_RETRY_DELAY_MS` (env, default 5000 ms); outbox `TripRequested` attempt mới; **excludedDriverIds giữ nguyên** với NoDriverFound (không có candidate bị loại); không ghi trip_event mới (state không đổi). Hết attempts hoặc quá deadline → `NO_DRIVER` theo row kế tiếp |
 | `DRIVER_OFFERED` / `SEARCHING` | `NO_DRIVER` | Hết 3 attempts hoặc deadline 120s (worker Saga) — **chỉ khi không còn reservation hiệu lực/đang xử lý** | Nếu còn reservation pending/hoạt động: Saga phase `COMPENSATING`, intent `RELEASE_RESERVATION` reconcile trước, rồi mới chuyển `NO_DRIVER`; trip_event `RESERVATION_RELEASED` + `NO_DRIVER`; notification passenger; Saga ABORTED (chốt F06) |
-| `SEARCHING` | `CANCELLED` | Cancel, không có reservation pending | Saga ABORTED; trip_event `TRIP_CANCELLED`; hủy matching attempt đang chạy |
+| `SEARCHING` | `CANCELLED` | Cancel, không có reservation pending | Saga ABORTED; trip_event `TRIP_CANCELLED`. **Không publish event "hủy matching"** (không tồn tại trong catalog — chốt F31): event `DriverProposed`/`NoDriverFound` attempt cũ tới sau đó bị bỏ qua — ACK + log theo events.md §4.4 |
 | `DRIVER_OFFERED` (hoặc đang RESERVING) | `CANCELLING` | Cancel khi có reservation pending/hoạt động | Saga `COMPENSATING`, intent `RELEASE_RESERVATION`; HTTP 202; trip_event `CANCELLING` |
 | `CANCELLING` | `CANCELLED` | Release xác nhận / không còn reserve pending (reconcile) | Driver giải phóng nếu đang RESERVED; trip_event `TRIP_CANCELLED`; notification passenger; Saga ABORTED |
 | `DRIVER_OFFERED` | `ACCEPTED` | Accept bởi offered driver đúng attempt + confirm thành công (driver BUSY) | Saga tiếp tục chờ finish; trip_event `TRIP_ACCEPTED`; notifications cả hai bên |
@@ -69,6 +70,7 @@ Quy tắc worker (chốt):
 - Worker quét saga chưa terminal có `next_retry_at` ≤ now; **claim bằng transaction ngắn**: CAS `version` + ghi `lease_owner`; hai worker/request handler không chạy trùng intent.
 - Không giữ DB lock khi gọi HTTP: lưu intent trước, gọi internal API, sau đó reconcile theo kết quả/timeout (GET reservation status).
 - Tranh chấp accept vs cancel: transaction khóa/version-check saga quyết định **một** intent thắng; intent thua trả 409 cho client; worker thực thi intent đã lưu.
+- **Mọi `reservationId` đã cấp mà trip bỏ phải được release** (chốt N24): cancel, reject hết candidate, NO_DRIVER hoặc reconcile timeout — Trip gửi `release` (tạo tombstone nếu release tới trước) và chỉ coi cleanup xong khi có xác nhận terminal; không tái dùng `commandId` cho thao tác khác; command lỗi (4xx/5xx/timeout) **không được lưu** để replay.
 
 ## 3. Reservation state machine (driver-service)
 
@@ -129,7 +131,7 @@ FAILED ──Trip cấp attempt mới (chỉ khi chưa có SUCCEEDED cho trip)�
 | # | Invariant | Cơ chế |
 |---:|---|---|
 | 1 | Driver ≤ 1 reservation hiệu lực/chuyến phục vụ | CAS trên `drivers.status` + `current_reservation_id`/`current_trip_id` (mục 3–4) |
-| 2 | Trip ≤ 1 assignment hiệu lực | Saga version-check + confirm chỉ từ RESERVED đúng trip/attempt; `trips.driver_id` set một lần khi ACCEPTED |
+| 2 | Trip ≤ 1 assignment **hiệu lực** (từ ACCEPTED) | Saga version-check + confirm chỉ từ RESERVED đúng trip/attempt. `trips.driver_id`/`driver_user_id` ghi khi `DRIVER_OFFERED` (để driver được offer xem được trip), xóa về NULL khi reject/expire — cùng null hoặc cùng có giá trị; assignment hiệu lực chỉ tồn tại từ ACCEPTED đến finish/release bù trừ |
 | 3 | Không start nếu assignment chưa confirm cả hai phía | Guard state: start chỉ từ `ACCEPTED` (chỉ đạt sau confirm OK) |
 | 4 | Retry không tạo trip/payment/assignment trùng | Idempotency-Key (HTTP), `commandId`+hash (internal), unique `(trip_id, attempt)` (payment), eventId dedup (inbox) |
 | 5 | Terminal không quay lại | Guard state ở mọi transition; stale event bỏ qua có log |

@@ -17,7 +17,7 @@ Trạng thái sửa theo dõi bằng checkbox `[ ]/[x]` trong chính file FIX_LI
 **Các chốt mới thay thế chi tiết lịch sử T09/T10/T12 phía dưới:**
 - Claim processed_commands trước nghiệp vụ, cùng transaction; duplicate đợi commit rồi replay/conflict. Khóa transaction theo reservationId bao phủ cả row chưa có. Driver CAS/fencing vẫn bắt buộc.
 - Scoped hash = SHA256(operation + '|' + reservationId + '|' + bodyHash); migration V4 chuyển hash RESERVE cũ. commandVersion 1..2147483647; worker expiry không tự tăng external version.
-- DriverId là profile, driverUserId là JWT sub. T15 giữ cả hai field trong proposal; T16 ghi cả trips.driver_id và trips.driver_user_id cùng assignment. Không đoán hai UUID bằng nhau.
+- DriverId là profile, driverUserId là JWT sub. T15 giữ cả hai field trong proposal; T16 ghi `trips.driver_id`/`driver_user_id` khi `DRIVER_OFFERED`, xóa về NULL khi reject/expire (chốt N22 — assignment hiệu lực chỉ từ ACCEPTED). Không đoán hai UUID bằng nhau.
 - Release bù trừ CONFIRMED được phép; BUSY chỉ được giải phóng khi cả reservation/trip pointer khớp. CONFIRMED không bị TTL expire. Confirm kiểm tra deadline sau khi khóa driver.
 - Giữ nguyên migration cũ; V3 Trip từ chối legacy replay không xác định được owner hoặc assignment thủ công thiếu identity. Dữ liệu T12 hợp lệ migrate tự động; không tự sửa dữ liệu thủ công bằng cách đoán user.
 - Không chạy migration vào DB dev trong lượt này. Các lần chạy service kiểm chứng dùng Testcontainers. Test restart đóng rồi mở application context/server/pool trong cùng JVM test; không tuyên bố đã kill JVM hay chạy E2E lifecycle qua Nginx.

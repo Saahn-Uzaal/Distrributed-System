@@ -1,8 +1,12 @@
 package com.ridehailing.trip;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.OutputStreamAppender;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import org.junit.jupiter.api.AfterEach;
+import org.slf4j.LoggerFactory;
 import org.flywaydb.core.Flyway;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,6 +38,7 @@ import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -586,5 +591,81 @@ class TripIntegrationTest {
         // POST /api/trips/quote với role DRIVER -> 403.
         Resp driverQuote = send("POST", "/api/trips/quote", token(UUID.randomUUID(), "DRIVER"), Map.of(), QUOTE_BODY);
         assertThat(driverQuote.status()).isEqualTo(403);
+    }
+
+    /** N12/N13 — X-Correlation-ID: UUID không canonical được chuẩn hóa; header trả về trong mọi response;
+     *  outbox dùng đúng id canonical. */
+    @org.junit.jupiter.api.Test
+    void correlationIdIsCanonicalizedAndReturnedInEveryResponse() throws Exception {
+        String nonCanonical = "1-2-3-4-5";
+        // UUID.fromString("1-2-3-4-5").toString() — canonical 36-char lowercase.
+        String expected = "00000001-0002-0003-0004-000000000005";
+
+        // 400 error: body.correlationId + response header đều canonical.
+        Resp badQuote = send("POST", "/api/trips/quote", token(UUID.randomUUID(), "PASSENGER"),
+                Map.of("X-Correlation-ID", nonCanonical),
+                "{\"pickup\":{\"latitude\":95,\"longitude\":106.7009},"
+                        + "\"destination\":{\"latitude\":10.8000,\"longitude\":106.7200}}");
+        assertThat(badQuote.status()).isEqualTo(400);
+        assertThat(badQuote.body().get("correlationId")).isEqualTo(expected);
+        assertThat(badQuote.headers().get("X-Correlation-ID")).containsExactly(expected);
+
+        // 202 success: header canonical; outbox.correlation_id = canonical.
+        UUID passenger = UUID.randomUUID();
+        Resp created = send("POST", "/api/trips", token(passenger, "PASSENGER"),
+                Map.of("Idempotency-Key", UUID.randomUUID().toString(), "X-Correlation-ID", nonCanonical), QUOTE_BODY);
+        assertThat(created.status()).isEqualTo(202);
+        assertThat(created.headers().get("X-Correlation-ID")).containsExactly(expected);
+        UUID tripId = UUID.fromString((String) created.body().get("tripId"));
+        String stored = jdbc.queryForObject("SELECT correlation_id FROM outbox WHERE aggregate_id = ?", String.class, tripId);
+        assertThat(stored).isEqualTo(expected);
+
+        // Không có header: server tự sinh UUID hợp lệ.
+        Resp list = send("GET", "/api/trips?page=0&size=20", token(passenger, "PASSENGER"), Map.of(), null);
+        List<String> generated = list.headers().get("X-Correlation-ID");
+        assertThat(generated).hasSize(1);
+        UUID.fromString(generated.get(0)); // parse được -> UUID hợp lệ
+    }
+
+    /** N11 — audit log trip_created: structured, MDC tripId, không ghi secret. */
+    @org.junit.jupiter.api.Test
+    void tripCreatedAuditLogIsStructuredAndSecretFree() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger("com.ridehailing.trip.service.TripService");
+        com.ridehailing.trip.logging.JsonLogLayout layout = new com.ridehailing.trip.logging.JsonLogLayout();
+        layout.setService("trip-service");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        OutputStreamAppender<ILoggingEvent> appender = new OutputStreamAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.setName("AUDIT_PROBE");
+        appender.setOutputStream(out);
+        appender.setLayout(layout);
+        appender.start();
+
+        UUID passenger = UUID.randomUUID();
+        logger.addAppender(appender);
+        try {
+            Resp created = send("POST", "/api/trips", token(passenger, "PASSENGER"),
+                    Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY);
+            assertThat(created.status()).isEqualTo(202);
+            String tripId = (String) created.body().get("tripId");
+
+            String text = out.toString(StandardCharsets.UTF_8);
+            Map<String, Object> audit = null;
+            for (String line : Arrays.stream(text.split("\n")).filter(l -> !l.isBlank()).toList()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = JSON.readValue(line.getBytes(StandardCharsets.UTF_8), LinkedHashMap.class);
+                if ("trip_created".equals(m.get("eventType"))) {
+                    audit = m;
+                    break;
+                }
+            }
+            assertThat(audit).isNotNull();
+            assertThat(audit.get("result")).isEqualTo("SUCCESS");
+            assertThat(audit.get("tripId")).isEqualTo(tripId);
+            // Không secret: không Bearer token, không email.
+            assertThat(text).doesNotContain("Bearer ").doesNotContain("@example.com");
+        } finally {
+            logger.detachAndStopAllAppenders();
+        }
     }
 }

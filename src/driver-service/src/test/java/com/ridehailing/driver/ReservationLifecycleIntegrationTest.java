@@ -1,6 +1,10 @@
 package com.ridehailing.driver;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.OutputStreamAppender;
 import org.junit.jupiter.api.AfterEach;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -21,6 +25,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -443,6 +448,52 @@ class ReservationLifecycleIntegrationTest {
         jdbc.update("UPDATE drivers SET status='RESERVED',current_trip_id=NULL WHERE id=?",driver);
         assertThat(post(r,"finish",UUID.randomUUID(),3,"\"tripId\":\""+trip+"\"").status()).isEqualTo(200);
         assertThat(driverRow(driver)).containsEntry("status","RESERVED").containsEntry("current_reservation_id",r);
+    }
+
+    /** N11 — audit log vòng đời reservation: reserved/confirmed/released với MDC reservationId+tripId. */
+    @org.junit.jupiter.api.Test
+    void reservationLifecycleAuditLogsAreStructured() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger("com.ridehailing.driver.service.ReservationService");
+        com.ridehailing.driver.logging.JsonLogLayout layout = new com.ridehailing.driver.logging.JsonLogLayout();
+        layout.setService("driver-service");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        OutputStreamAppender<ILoggingEvent> appender = new OutputStreamAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.setName("AUDIT_PROBE");
+        appender.setOutputStream(out);
+        appender.setLayout(layout);
+        appender.start();
+
+        UUID r = UUID.randomUUID(), trip = UUID.randomUUID(), driver = availableDriver();
+        logger.addAppender(appender);
+        try {
+            reserveOk(r, trip, driver);
+            assertThat(post(r, "confirm", UUID.randomUUID(), 2, confirmFields(trip, driver, 1)).status()).isEqualTo(200);
+            assertThat(post(r, "release", UUID.randomUUID(), 3, "\"reason\":\"CANCELLED\"").status()).isEqualTo(200);
+
+            String text = out.toString(StandardCharsets.UTF_8);
+            Map<String, Object> reserved = null, confirmed = null, released = null;
+            for (String line : Arrays.stream(text.split("\n")).filter(l -> !l.isBlank()).toList()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = JSON.readValue(line.getBytes(StandardCharsets.UTF_8), LinkedHashMap.class);
+                switch ((String) m.get("eventType")) {
+                    case "reservation_reserved" -> reserved = m;
+                    case "reservation_confirmed" -> confirmed = m;
+                    case "reservation_released" -> released = m;
+                    default -> { }
+                }
+            }
+            assertThat(reserved).isNotNull();
+            assertThat(confirmed).isNotNull();
+            assertThat(released).isNotNull();
+            for (Map<String, Object> m : List.of(reserved, confirmed, released)) {
+                assertThat(m.get("result")).isEqualTo("SUCCESS");
+                assertThat(m.get("reservationId")).isEqualTo(r.toString());
+                assertThat(m.get("tripId")).isEqualTo(trip.toString());
+            }
+        } finally {
+            logger.detachAndStopAllAppenders();
+        }
     }
 
 }

@@ -11,6 +11,9 @@ import com.ridehailing.identity.web.dto.LoginRequest;
 import com.ridehailing.identity.web.dto.LoginResponse;
 import com.ridehailing.identity.web.dto.RegisterRequest;
 import com.ridehailing.identity.web.dto.UserResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +33,9 @@ public class UserService {
 
     /** Giới hạn BCrypt: tối đa 72 byte UTF-8 cho password. */
     public static final int MAX_PASSWORD_BYTES = 72;
+
+    /** N11 — audit log: eventType riêng cho register/login; không ghi email đầy đủ hay password. */
+    private static final Logger log = LoggerFactory.getLogger(UserService.class);
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
@@ -66,6 +72,10 @@ public class UserService {
                 req.role(),
                 Instant.now());
         users.save(user);
+        // N11 audit: user_registered — chỉ userId + role, không email/password.
+        MDC.put("eventType", "user_registered");
+        MDC.put("result", "SUCCESS");
+        log.info("user registered userId={} role={}", user.getId(), user.getRole());
         return toResponse(user);
     }
 
@@ -75,11 +85,18 @@ public class UserService {
         if (req.password().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) {
             throw new InvalidCredentialsException();
         }
-        User user = users.findByEmail(normalizeEmail(req.email()))
-                .orElseThrow(InvalidCredentialsException::new);
-        if (!passwordEncoder.matches(req.password(), user.getPasswordHash())) {
+        User user = users.findByEmail(normalizeEmail(req.email())).orElse(null);
+        if (user == null || !passwordEncoder.matches(req.password(), user.getPasswordHash())) {
+            // N11 audit: login_failed — message không chứa email đầy đủ hay password.
+            MDC.put("eventType", "login_failed");
+            MDC.put("result", "FAILURE");
+            log.info("login failed (invalid credentials)");
             throw new InvalidCredentialsException();
         }
+        // N11 audit: login_succeeded — chỉ userId + role.
+        MDC.put("eventType", "login_succeeded");
+        MDC.put("result", "SUCCESS");
+        log.info("login succeeded userId={} role={}", user.getId(), user.getRole());
         return new LoginResponse(jwt.issue(user), jwt.getExpiresInSeconds(), toResponse(user));
     }
 

@@ -38,11 +38,16 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
         // R05 fix: structured fields theo spec §11 — eventType trong suốt request;
         // result/durationMs được set trước dòng log cuối (vẫn còn trong MDC).
         MDC.put("eventType", "http_request");
+        // N12: trả X-Correlation-ID trong mọi response — set trước chain để cả handler lỗi
+        // và controller đều giữ header.
+        response.setHeader("X-Correlation-ID", id);
         long startNanos = System.nanoTime();
         try {
             chain.doFilter(request, response);
         } finally {
             long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
+            // N11: dòng log truy cập luôn giữ eventType=http_request dù business code đã đổi MDC.
+            MDC.put("eventType", "http_request");
             MDC.put("result", String.valueOf(response.getStatus()));
             MDC.put("durationMs", String.valueOf(durationMs));
             log.info("request method={} path={} status={} correlationId={}",
@@ -58,7 +63,9 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
             return s;
         }
         String id = request.getHeader("X-Correlation-ID");
-        return isValidUuid(id) ? id.trim() : UUID.randomUUID().toString();
+        // N13: chuẩn hóa — UUID.fromString(...).toString() để log, error body và outbox dùng
+        // cùng một giá trị (vd "1-2-3-4-5" -> "00001234-0000-0000-0000-000000000045").
+        return isValidUuid(id) ? UUID.fromString(id.trim()).toString() : UUID.randomUUID().toString();
     }
 
     public static boolean isValidUuid(String value) {

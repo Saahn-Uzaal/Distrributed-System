@@ -1,5 +1,8 @@
 package com.ridehailing.driver;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.OutputStreamAppender;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSObject;
@@ -7,6 +10,7 @@ import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.ridehailing.driver.geo.Haversine;
 import org.junit.jupiter.api.AfterEach;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -28,6 +32,7 @@ import java.security.KeyPairGenerator;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -494,6 +499,47 @@ class DriverProfileIntegrationTest {
         var candidate=(Map<?,?>)candidates.get(0);
         assertThat(candidate.get("driverId")).isEqualTo(driver.toString());
         assertThat(candidate.get("driverUserId")).isEqualTo(user.toString());
+    }
+
+    /** N11 — audit log driver_availability_changed: structured, không ghi secret. */
+    @org.junit.jupiter.api.Test
+    void availabilityChangeAuditLogIsStructuredAndSecretFree() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger("com.ridehailing.driver.service.DriverService");
+        com.ridehailing.driver.logging.JsonLogLayout layout = new com.ridehailing.driver.logging.JsonLogLayout();
+        layout.setService("driver-service");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        OutputStreamAppender<ILoggingEvent> appender = new OutputStreamAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.setName("AUDIT_PROBE");
+        appender.setOutputStream(out);
+        appender.setLayout(layout);
+        appender.start();
+
+        UUID user = UUID.randomUUID();
+        createProfileViaApi(user, "Driver A", "51A-123.45", "MOTORBIKE");
+        String token = signToken(user, "DRIVER", user + "@t9.test");
+        logger.addAppender(appender);
+        try {
+            Resp on = send("PUT", "/api/drivers/me/availability", token, null, "{\"status\":\"AVAILABLE\"}");
+            assertThat(on.status()).isEqualTo(200);
+
+            String text = out.toString(StandardCharsets.UTF_8);
+            Map<String, Object> audit = null;
+            for (String line : Arrays.stream(text.split("\n")).filter(l -> !l.isBlank()).toList()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = JSON.readValue(line.getBytes(StandardCharsets.UTF_8), LinkedHashMap.class);
+                if ("driver_availability_changed".equals(m.get("eventType"))) {
+                    audit = m;
+                    break;
+                }
+            }
+            assertThat(audit).isNotNull();
+            assertThat(audit.get("result")).isEqualTo("SUCCESS");
+            // Không secret: không Bearer token, không email.
+            assertThat(text).doesNotContain("Bearer ").doesNotContain("@t9.test");
+        } finally {
+            logger.detachAndStopAllAppenders();
+        }
     }
 
 }

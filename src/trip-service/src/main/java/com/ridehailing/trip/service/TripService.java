@@ -12,6 +12,9 @@ import com.ridehailing.trip.security.AuthenticatedUser;
 import com.ridehailing.trip.security.CorrelationIdFilter;
 import com.ridehailing.trip.security.Role;
 import com.ridehailing.trip.web.dto.QuoteRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +45,9 @@ import java.util.UUID;
 public class TripService {
 
     private static final String CREATE_TRIP_OPERATION = "CREATE_TRIP";
+
+    /** N11 — audit log: trip_created; không ghi secret. */
+    private static final Logger log = LoggerFactory.getLogger(TripService.class);
 
     /** Kết quả create: status HTTP + body response (+ Location path cho header). */
     public record CreateOutcome(int httpStatus, Map<String, Object> body) {
@@ -129,6 +135,12 @@ public class TripService {
 
         // Trip event history (contract §3.5): transition đầu – -> SEARCHING.
         eventRepo.insert(tripId, "TRIP_CREATED", 1, user.userId(), "Trip created in SEARCHING");
+
+        // N11 audit: trip_created — MDC tripId; chỉ userId, không email/password.
+        MDC.put("tripId", tripId.toString());
+        MDC.put("eventType", "trip_created");
+        MDC.put("result", "SUCCESS");
+        log.info("trip created state=SEARCHING matchingAttempt=1 passengerUserId={}", user.userId());
 
         return new CreateOutcome(202, body);
     }

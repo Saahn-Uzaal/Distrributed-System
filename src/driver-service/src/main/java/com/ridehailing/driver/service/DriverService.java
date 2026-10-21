@@ -6,6 +6,9 @@ import com.ridehailing.driver.exception.PlateTakenException;
 import com.ridehailing.driver.exception.StateConflictException;
 import com.ridehailing.driver.geo.Haversine;
 import com.ridehailing.driver.repo.DriverRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -41,6 +44,9 @@ public class DriverService {
     }
 
     private static final int MAX_CANDIDATES = 5;
+
+    /** N11 — audit log: driver_availability_changed; không ghi secret. */
+    private static final Logger log = LoggerFactory.getLogger(DriverService.class);
 
     private final DriverRepository repo;
     private final long heartbeatStaleAfterMs;
@@ -95,6 +101,10 @@ public class DriverService {
             throw new StateConflictException(
                     "Driver is not free to change availability while " + driver.status() + ".", details);
         }
+        // N11 audit: driver_availability_changed — chỉ userId + status mới.
+        MDC.put("eventType", "driver_availability_changed");
+        MDC.put("result", "SUCCESS");
+        log.info("driver availability changed userId={} status={}", userId, status);
         return new AvailabilityResult(driver.id(), status, now);
     }
 

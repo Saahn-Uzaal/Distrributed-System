@@ -1,10 +1,14 @@
 package com.ridehailing.identity;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.OutputStreamAppender;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSObject;
 import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.RSASSASigner;
+import com.ridehailing.identity.logging.JsonLogLayout;
 import com.ridehailing.identity.service.JwtService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,10 +16,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -612,6 +618,61 @@ class AuthFlowIntegrationTest {
         Resp ct = postRaw("/api/auth/register", "not-json", "text/plain");
         assertThat(ct.status()).isEqualTo(415);
         assertThat((String) ct.body().get("code")).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+    }
+
+    /** N11 — audit log register/login qua appender thật; không lộ email đầy đủ / password / token. */
+    @Test
+    void businessAuditLogsAreStructuredAndSecretFree() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger("com.ridehailing.identity.service.UserService");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        OutputStreamAppender<ILoggingEvent> appender = new OutputStreamAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.setName("AUDIT_CAPTURE");
+        appender.setOutputStream(out);
+        JsonLogLayout layout = new JsonLogLayout();
+        layout.setService("identity-service");
+        appender.setLayout(layout);
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            String email = "audit-" + UUID.randomUUID() + "@example.com";
+            Resp reg = post("/api/auth/register", new RegisterBody(email, PASSWORD, "Audit User", "PASSENGER"));
+            assertThat(reg.status()).isEqualTo(201);
+
+            Resp okLogin = post("/api/auth/login", new LoginBody(email, PASSWORD));
+            assertThat(okLogin.status()).isEqualTo(200);
+
+            Resp badLogin = post("/api/auth/login", new LoginBody(email, "wrong-pass-9"));
+            assertThat(badLogin.status()).isEqualTo(401);
+        } finally {
+            logger.detachAndStopAllAppenders();
+        }
+
+        String text = out.toString(StandardCharsets.UTF_8);
+        List<String> lines = Arrays.stream(text.split("\n")).filter(l -> !l.isBlank()).toList();
+        assertThat(lines).hasSizeGreaterThanOrEqualTo(3);
+        List<Map<String, Object>> events = new ArrayList<>();
+        for (String line : lines) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> m = JSON.readValue(line.getBytes(StandardCharsets.UTF_8), LinkedHashMap.class);
+            events.add(m); // mỗi dòng parse được bằng JSON
+        }
+        assertThat(events).anySatisfy(e -> {
+            assertThat(e.get("eventType")).isEqualTo("user_registered");
+            assertThat(e.get("result")).isEqualTo("SUCCESS");
+        });
+        assertThat(events).anySatisfy(e -> {
+            assertThat(e.get("eventType")).isEqualTo("login_succeeded");
+            assertThat(e.get("result")).isEqualTo("SUCCESS");
+        });
+        assertThat(events).anySatisfy(e -> {
+            assertThat(e.get("eventType")).isEqualTo("login_failed");
+            assertThat(e.get("result")).isEqualTo("FAILURE");
+        });
+        // Không lộ secret: email đầy đủ, password hay "Bearer ".
+        assertThat(text).doesNotContain(PASSWORD);
+        assertThat(text).doesNotContain("@example.com");
+        assertThat(text).doesNotContain("Bearer ");
     }
 
     record RegisterBody(String email, String password, String fullName, String role) {

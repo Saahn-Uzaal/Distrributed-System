@@ -2,15 +2,20 @@ package com.ridehailing.driver;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.LoggingEvent;
+import ch.qos.logback.core.OutputStreamAppender;
 import com.ridehailing.driver.logging.JsonLogLayout;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -85,5 +90,58 @@ class JsonLogLayoutTest {
                 logger.getName(), logger, Level.INFO, "value with \"quotes\" and \\ backslash", null, new Object[0]);
         Map<String, Object> m = parse(layout.doLayout(event)); // parse được -> escape đúng
         assertThat(m.get("message")).isEqualTo("value with \"quotes\" and \\ backslash");
+    }
+
+    /** F20/Q02 — framing qua OutputStreamAppender thật: 3 event -> đúng 3 dòng, mỗi dòng parse JSON. */
+    @Test
+    void appenderFramesEachEventOnItsOwnLine() throws Exception {
+        JsonLogLayout layout = new JsonLogLayout();
+        layout.setService("driver-service");
+
+        Logger logger = (Logger) LoggerFactory.getLogger("com.example.FramingProbe");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        OutputStreamAppender<ILoggingEvent> appender = new OutputStreamAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.setName("FRAMING_PROBE");
+        appender.setOutputStream(out);
+        appender.setLayout(layout);
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            for (int i = 1; i <= 3; i++) {
+                MDC.put("correlationId", UUID.randomUUID().toString());
+                MDC.put("eventType", "http_request");
+                MDC.put("result", String.valueOf(200 + i));
+                logger.info("probe event {}", i);
+            }
+        } finally {
+            MDC.clear();
+            logger.detachAndStopAllAppenders();
+        }
+
+        String text = out.toString(StandardCharsets.UTF_8);
+        assertThat(text).doesNotContain("}{"); // không còn \"}{\"timestamp\"
+        List<String> lines = Arrays.stream(text.split("\n")).filter(l -> !l.isBlank()).toList();
+        assertThat(lines).hasSize(3);
+        for (String line : lines) {
+            Map<String, Object> m = parse(line); // mỗi dòng parse được bằng JSON
+            assertThat(m.get("timestamp")).asString().endsWith("Z");
+        }
+    }
+
+    /** F21 — stack trace đầy đủ: exception có cause -> output chứa class cause + frame \"at ...\". */
+    @Test
+    void layoutIncludesFullStackTraceWithCause() throws Exception {
+        JsonLogLayout layout = new JsonLogLayout();
+        layout.setService("driver-service");
+        Logger logger = (Logger) LoggerFactory.getLogger("com.example.StackTraceProbe");
+        LoggingEvent event = new LoggingEvent(
+                logger.getName(), logger, Level.ERROR, "boom",
+                new IllegalStateException("outer", new IllegalArgumentException("inner-cause")), new Object[0]);
+        Map<String, Object> m = parse(layout.doLayout(event));
+        String stackTrace = (String) m.get("stackTrace");
+        assertThat(stackTrace).contains("IllegalArgumentException"); // tên class cause
+        assertThat(stackTrace).contains("Caused by:");
+        assertThat(stackTrace).containsPattern("\\bat [a-zA-Z0-9.$]+\\("); // ít nhất một frame "at ..."
     }
 }

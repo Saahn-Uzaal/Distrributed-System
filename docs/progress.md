@@ -368,3 +368,35 @@ Docs-only, theo thứ tự khuyến nghị của FIX_LIST ("chốt N15, N21–N2
 - **F04 → contract:** thêm `METHOD_NOT_ALLOWED` (405) và `UNSUPPORTED_MEDIA_TYPE` (415) vào bảng mã lỗi api-contracts §1.2.
 
 Kiểm chứng: 3 tài liệu contract nhất quán (đọc lại sau sửa); không thay đổi code/test — `clean verify` không bị ảnh hưởng (docs-only).
+
+## Lượt 2026-10-21 — FIX_LIST T01–T12: Phase 4 (T07 logging F20/F21/N11/N12/N13)
+
+### Việc đã làm
+- **T07-6 (F20):** `JsonLogLayout.doLayout` ×5 trả về `json + CoreConstants.LINE_SEPARATOR` ở cả nhánh chính và fallback — mỗi event một dòng JSON.
+- **T07-7 (F21):** field `stackTrace` = `ThrowableProxyUtil.asString(throwable)` (`ch.qos.logback.classic.spi`) kèm chuỗi cause; không đưa stack trace vào HTTP response. (Lỗi package ban đầu `classic.util`/`core.util` → sửa bằng javap trên jar logback 1.5.38.)
+- **T07-8 (N11):** audit log nghiệp vụ, không ghi secret:
+  - identity `UserService`: `user_registered`, `login_succeeded`/`login_failed` (không email/password trong message).
+  - driver `DriverService.setAvailability`: `driver_availability_changed`; `ReservationService`: helper `audit(eventType, reservationId, tripId, detail)` set MDC `reservationId`/`tripId` + eventType + result=SUCCESS — gọi ở doReserve (**sau** CAS thành công), confirm, release (3 nhánh: tombstone / already-terminal / thực), finish, expire.
+  - trip `TripService.create`: `trip_created` với MDC `tripId`, sau outbox+event insert.
+- **T07-9 (N13):** `CorrelationIdFilter.resolve()` ×5 chuẩn hóa bằng `UUID.fromString(value.trim()).toString()` — attribute, MDC, header, error body và outbox dùng cùng một giá trị canonical.
+- **T07-10 (N12 service):** `doFilterInternal` set `response.setHeader("X-Correlation-ID", id)` trước `chain.doFilter`; finally block re-set `eventType=http_request` trước dòng access log để business code không làm hỏng eventType của access line.
+
+### Tests mới (capture qua OutputStreamAppender thật gắn vào logger service cụ thể)
+- `JsonLogLayoutTest.appenderFramesEachEventOnItsOwnLine` ×5: 3 event → đúng 3 dòng, mỗi dòng parse JSON, không còn `}{`; `layoutIncludesFullStackTraceWithCause` ×5: cause class + `Caused by:` + frame `at ...` (T07-14/Q02).
+- identity `AuthFlowIntegrationTest.businessAuditLogsAreStructuredAndSecretFree`: register/login-ok/login-fail qua HTTP, assert eventType+result, toàn bộ output không chứa PASSWORD/"@example.com"/"Bearer ".
+- trip `TripIntegrationTest.correlationIdIsCanonicalizedAndReturnedInEveryResponse` (N12/N13): header `X-Correlation-ID: 1-2-3-4-5` → error body 400, response header và `outbox.correlation_id` đều = `00000001-0002-0003-0004-000000000005`; không header → UUID server-generated hợp lệ.
+- trip `TripIntegrationTest.tripCreatedAuditLogIsStructuredAndSecretFree`: assert `trip_created` + MDC tripId + không secret.
+- driver `ReservationLifecycleIntegrationTest.reservationLifecycleAuditLogsAreStructured`: reserve→confirm→release, assert 3 dòng audit với MDC reservationId+tripId.
+- driver `DriverProfileIntegrationTest.availabilityChangeAuditLogIsStructuredAndSecretFree`: PUT availability → `driver_availability_changed` + không secret.
+
+### Lệnh đã chạy và kết quả thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` (root, JDK 21) | **BUILD SUCCESS** — identity **25**, driver **82**, trip **47**, matching **8**, payment **8** = **170 tests / 0 failures/errors/skipped** |
+
+### Ghi chú kỹ thuật
+- logback 1.5.x: `Logger` không có `getContext()` — dùng `getLoggerContext()`; `ThrowableProxyUtil` nằm trong `ch.qos.logback.classic.spi` (verify javap trên jar local).
+- Replay command (`execute()` early-return) không re-log business event — event đã log khi lần đầu execute.
+
+### Trạng thái FIX_LIST
+T07-6..T07-10 + T07-14 đánh dấu `[x]` kèm bằng chứng. Còn mở: T07-11 (N03 body limit), T07-12 (N08 internal token rỗng/.env), T07-13 (Q01 secret-scan toàn luồng — một phần đã phủ bởi test audit identity).

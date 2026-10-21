@@ -13,6 +13,9 @@ import com.ridehailing.driver.web.dto.ReserveRequest;
 import com.ridehailing.driver.web.dto.ConfirmRequest;
 import com.ridehailing.driver.web.dto.ReleaseRequest;
 import com.ridehailing.driver.web.dto.FinishRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -43,6 +46,9 @@ public class ReservationService {
     public record ReservationView(UUID reservationId, String state, UUID tripId, UUID driverId,
                                  Integer attempt, Instant expiresAt, int version) {
     }
+
+    /** N11 — audit log: reservation_reserved/confirmed/released/finished/expired; không ghi secret. */
+    private static final Logger log = LoggerFactory.getLogger(ReservationService.class);
 
     private final DriverRepository driverRepo;
     private final ReservationRepository reservationRepo;
@@ -124,6 +130,10 @@ public class ReservationService {
                     "Driver is not AVAILABLE or heartbeat is stale.", details);
         }
 
+        // N11 audit: reservation_reserved — chỉ ghi sau khi CAS thành công; MDC reservationId + tripId.
+        audit("reservation_reserved", reservationId, cmd.tripId(),
+                "driverId=" + cmd.driverId() + " attempt=" + cmd.attempt());
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("reservationId", reservationId.toString());
         body.put("state", "RESERVED");
@@ -153,6 +163,7 @@ public class ReservationService {
                 throw conflict(row, "Driver no longer points to this RESERVED assignment.");
             }
             reservationRepo.transition(id, "CONFIRMED", null, (int) cmd.commandVersion());
+            audit("reservation_confirmed", id, row.tripId(), "driverId=" + row.driverId());
             return response(id, "CONFIRMED");
         });
     }
@@ -168,15 +179,19 @@ public class ReservationService {
             checkVersion(id, cmd.commandVersion(), row);
             if (row == null) {
                 reservationRepo.insertTombstone(id, (int) cmd.commandVersion(), cmd.reason());
+                audit("reservation_released", id, null, "reason=" + cmd.reason() + " (tombstone)");
                 return response(id, "RELEASED");
             }
             if (terminal(row)) {
                 // Do not rewrite terminal history or touch driver pointers on late commands.
                 reservationRepo.transition(id, row.state(), row.terminalReason(), (int) cmd.commandVersion());
+                audit("reservation_released", id, row.tripId(),
+                        "reason=" + cmd.reason() + " (already terminal " + row.state() + ")");
                 return response(id, row.state());
             }
             reservationRepo.releaseDriver(row);
             reservationRepo.transition(id, "RELEASED", cmd.reason(), (int) cmd.commandVersion());
+            audit("reservation_released", id, row.tripId(), "reason=" + cmd.reason());
             return response(id, "RELEASED");
         });
     }
@@ -195,6 +210,7 @@ public class ReservationService {
             }
             if (!alreadyFinished) reservationRepo.releaseDriver(row);
             reservationRepo.transition(id, "RELEASED", "TRIP_COMPLETED", (int) cmd.commandVersion());
+            audit("reservation_finished", id, row.tripId(), "tripId=" + cmd.tripId());
             return response(id, "RELEASED");
         });
     }
@@ -206,6 +222,8 @@ public class ReservationService {
         var row = reservationRepo.findById(id).orElse(null);
         if (row != null && reservationRepo.expireReserved(id) == 1) {
             reservationRepo.releaseDriver(row);
+            // N11: expiry worker log từng reservation đã expire.
+            audit("reservation_expired", id, row.tripId(), "driverId=" + row.driverId());
         }
     }
 
@@ -227,6 +245,17 @@ public class ReservationService {
         reservationRepo.completeProcessed(commandId, "{\"status\":" + outcome.httpStatus()
                 + ",\"body\":" + writeJson(outcome.body()) + "}");
         return outcome;
+    }
+
+    /** N11 — audit log nghiệp vụ: eventType riêng + MDC reservationId/tripId; không ghi secret. */
+    private void audit(String eventType, UUID reservationId, UUID tripId, String detail) {
+        MDC.put("reservationId", reservationId.toString());
+        if (tripId != null) {
+            MDC.put("tripId", tripId.toString());
+        }
+        MDC.put("eventType", eventType);
+        MDC.put("result", "SUCCESS");
+        log.info("{} {}", eventType, detail);
     }
 
     private ReservationRepository.ReservationRow required(UUID id) {

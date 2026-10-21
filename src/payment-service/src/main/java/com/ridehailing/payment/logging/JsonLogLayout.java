@@ -2,6 +2,8 @@ package com.ridehailing.payment.logging;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
+import ch.qos.logback.classic.spi.ThrowableProxyUtil;
+import ch.qos.logback.core.CoreConstants;
 import ch.qos.logback.core.LayoutBase;
 import tools.jackson.databind.ObjectMapper;
 
@@ -53,12 +55,17 @@ public class JsonLogLayout extends LayoutBase<ILoggingEvent> {
         IThrowableProxy throwable = event.getThrowableProxy();
         if (throwable != null) {
             fields.put("exception", throwable.getClassName() + ": " + throwable.getMessage());
+            // F21: stack trace đầy đủ kèm chuỗi cause — ThrowableProxyUtil.asString ghi cả
+            // các section "Caused by:"; ObjectMapper tự escape JSON. Không đưa vào HTTP response.
+            fields.put("stackTrace", ThrowableProxyUtil.asString(throwable));
         }
+        // F20: mỗi event là đúng một dòng — append LINE_SEPARATOR ở cả hai nhánh để các event
+        // liên tiếp không dính thành một chuỗi JSON ("}{\"timestamp\"").
         try {
-            return JSON.writeValueAsString(fields);
+            return JSON.writeValueAsString(fields) + CoreConstants.LINE_SEPARATOR;
         } catch (Exception e) {
             // Fallback an toàn: layout không bao giờ ném exception.
-            return "{\"message\":\"" + escape(event.getFormattedMessage()) + "\"}";
+            return "{\"message\":\"" + escape(event.getFormattedMessage()) + "\"}" + CoreConstants.LINE_SEPARATOR;
         }
     }
 

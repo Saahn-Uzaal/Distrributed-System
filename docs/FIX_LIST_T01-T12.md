@@ -261,27 +261,31 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Sửa: trả về `json + CoreConstants.LINE_SEPARATOR` ở cả nhánh chính và nhánh fallback.
   - Kiểm chứng: test qua `OutputStreamAppender` thật, ghi 3 event → đúng 3 dòng, mỗi dòng parse được bằng JSON. Build log không còn `}{"timestamp"` (hiện có 19 chỗ).
 
-- [ ] **T07-7 — F21 (P2): Log exception mất stack trace và cause**
+- [x] **T07-7 — F21 (P2): Log exception mất stack trace và cause**
   - Vị trí: `*/logging/JsonLogLayout.java:55` (×5).
   - Sửa: dùng `ThrowableProxyUtil.asString(throwable)` cho field `stackTrace` (JSON escape đã được ObjectMapper xử lý), kèm chuỗi cause. Không đưa stack trace vào HTTP response.
   - Kiểm chứng: test exception có cause → output chứa tên class cause và ít nhất một frame `at ...`.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `JsonLogLayout.doLayout` ghi field `stackTrace` = `ThrowableProxyUtil.asString(throwable)` (`ch.qos.logback.classic.spi`) ở cả nhánh chính và fallback; test `layoutIncludesFullStackTraceWithCause` ×5: exception có cause → output chứa tên class cause + `Caused by:` + frame `at ...`. 170 tests / 0 failures.
 
-- [ ] **T07-8 — N11 (P2): Không có log nghiệp vụ hay audit**
+- [x] **T07-8 — N11 (P2): Không có log nghiệp vụ hay audit**
   - Vị trí: toàn bộ service code; `JsonLogLayout.STRUCTURED_MDC_KEYS`.
   - Vấn đề: chỉ có log truy cập HTTP và log lỗi. Không log register/login (kể cả thất bại), profile/availability, reserve/confirm/release/finish/expire, tạo trip. MDC `tripId`/`reservationId` không bao giờ được set; `eventType` luôn là `http_request`. Trái đề §4.1, §4.5 và spec §11.
   - Sửa: thêm log INFO có `eventType` riêng và `result`: `user_registered`, `login_succeeded`/`login_failed` (không log email đầy đủ hay password), `driver_availability_changed`, `reservation_reserved`/`confirmed`/`released`/`finished`/`expired` (set MDC `reservationId`, `tripId`), `trip_created` (set `tripId`). Expiry worker log từng reservation đã expire.
   - Kiểm chứng: test appender assert đủ event và MDC; không chứa token/password.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): audit log nghiệp vụ đã thêm — identity `UserService` (`user_registered`, `login_succeeded`/`login_failed`; không ghi email/password), driver `DriverService.setAvailability` (`driver_availability_changed`) và `ReservationService` (`reservation_reserved` chỉ sau CAS thành công, `reservation_confirmed`, `reservation_released` 3 nhánh tombstone/already-terminal/thực, `reservation_finished`, `reservation_expired`; MDC `reservationId`+`tripId`), trip `TripService.create` (`trip_created`; MDC `tripId`). Test capture qua OutputStreamAppender thật: `AuthFlowIntegrationTest.businessAuditLogsAreStructuredAndSecretFree`, `ReservationLifecycleIntegrationTest.reservationLifecycleAuditLogsAreStructured`, `DriverProfileIntegrationTest.availabilityChangeAuditLogIsStructuredAndSecretFree`, `TripIntegrationTest.tripCreatedAuditLogIsStructuredAndSecretFree` (assert eventType+result+MDC, toàn bộ output không chứa `Bearer `/email). 170 tests / 0 failures.
 
-- [ ] **T07-9 — N13 (P3): Correlation ID không chuẩn hóa**
+- [x] **T07-9 — N13 (P3): Correlation ID không chuẩn hóa**
   - Vị trí: `*/security/CorrelationIdFilter.java` `resolve()` (×5).
   - Vấn đề: `X-Correlation-ID: 1-2-3-4-5` được chấp nhận (JDK 21 parse được) nhưng chuỗi gốc được ghi vào log/error, còn Trip outbox lưu dạng chuẩn → tìm log bị lệch.
   - Sửa: chỉ chấp nhận đúng 36 ký tự theo regex UUID, hoặc dùng `UUID.fromString(x).toString()` làm giá trị chuẩn cho mọi nơi.
   - Kiểm chứng: gửi `1-2-3-4-5` → log, error body và outbox dùng cùng một giá trị.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `CorrelationIdFilter.resolve()` chuẩn hóa bằng `UUID.fromString(value.trim()).toString()` ở cả 5 service; test `TripIntegrationTest.correlationIdIsCanonicalizedAndReturnedInEveryResponse`: header `X-Correlation-ID: 1-2-3-4-5` → error body (400), response header và `outbox.correlation_id` đều bằng `00000001-0002-0003-0004-000000000005`; không có header → server sinh UUID hợp lệ.
 
-- [ ] **T07-10 — N12 phần service (P3): Không trả `X-Correlation-ID` trong response**
+- [x] **T07-10 — N12 phần service (P3): Không trả `X-Correlation-ID` trong response**
   - Vị trí: `*/security/CorrelationIdFilter.java`.
   - Sửa: `response.setHeader("X-Correlation-ID", id)` trước `chain.doFilter`. Phần Nginx xem T08-8.
   - Kiểm chứng: response 200 có header đúng giá trị đã gửi hoặc vừa sinh.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `doFilterInternal` set `response.setHeader("X-Correlation-ID", id)` trước `chain.doFilter` ở cả 5 service; test assert header có mặt với giá trị canonical trên cả response 400 và 202.
 
 - [ ] **T07-11 — N03 (P3): Ứng dụng không giới hạn kích thước body**
   - Vị trí: `*/application.yml`; filter.
@@ -297,8 +301,9 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Vị trí: `*/JsonLogLayoutTest.java` (×5).
   - Sửa: assert trên toàn bộ chuỗi output (không chỉ top-level key) không chứa token mẫu, password mẫu hay chuỗi `Bearer `; chạy một luồng register/login thật rồi quét log đã ghi.
 
-- [ ] **T07-14 — Q02 (P3): Chưa test framing nhiều event và stack trace**
+- [x] **T07-14 — Q02 (P3): Chưa test framing nhiều event và stack trace**
   - Sửa: gộp chung với T07-6 và T07-7 (test qua appender thật).
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `JsonLogLayoutTest.appenderFramesEachEventOnItsOwnLine` ×5 — OutputStreamAppender thật, 3 event → đúng 3 dòng, mỗi dòng parse JSON, không còn `}{`; `layoutIncludesFullStackTraceWithCause` ×5. 170 tests / 0 failures.
 
 - [x] **T07-15 — Q03 (P2): Security test chỉ dùng URL chuẩn**
   - Sửa: gộp chung với T07-1, T07-3, T07-4. Bộ test phải có URL biến thể, NumericDate có phần lẻ, JSON sai kiểu và assert DB không đổi.

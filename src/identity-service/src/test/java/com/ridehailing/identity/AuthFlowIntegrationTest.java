@@ -524,6 +524,96 @@ class AuthFlowIntegrationTest {
         assertThat((String) admin.body().get("code")).isEqualTo("INVALID_INPUT");
     }
 
+    private Resp putJson(String path, Object body, String correlationHeader) throws Exception {
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+                .PUT(java.net.http.HttpRequest.BodyPublishers.ofByteArray(
+                        JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8)))
+                .header("Content-Type", "application/json");
+        if (correlationHeader != null) {
+            req.header("X-Correlation-ID", correlationHeader);
+        }
+        HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    private Resp postRaw(String path, String rawBody, String contentType) throws Exception {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(BASE + path))
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(rawBody))
+                .header("Content-Type", contentType)
+                .build();
+        HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    /** F02: exp = now + 0.5 s vẫn hợp lệ; nbf tương lai hoặc "nbf": null -> 401. */
+    @Test
+    void fractionalSecondExpAcceptedAndNbfFutureOrNullRejected() throws Exception {
+        String userId = registerUser("frac-" + UUID.randomUUID() + "@example.com");
+
+        Map<String, Object> claims = validClaims(userId);
+        claims.put("exp", Instant.now().toEpochMilli() / 1000.0 + 0.5); // now + 0.5 s
+        Resp ok = get("/api/auth/me", signToken(claims));
+        assertThat(ok.status()).isEqualTo(200);
+
+        claims = validClaims(userId);
+        claims.put("nbf", Instant.now().toEpochMilli() / 1000.0 + 0.9); // chưa hiệu lực
+        assert401Unauthorized(signToken(claims));
+
+        claims = validClaims(userId);
+        claims.put("nbf", null); // có mặt nhưng null -> invalid (F02)
+        assert401Unauthorized(signToken(claims));
+    }
+
+    /** F03: role/password/fullName dạng số không được ép kiểu -> 400 INVALID_INPUT, DB không đổi. */
+    @Test
+    void numericRolePasswordAndFullNameRejectedWithoutPersisting() throws Exception {
+        String email = "coerce-" + UUID.randomUUID() + "@example.com";
+
+        Map<String, Object> numRole = new LinkedHashMap<>();
+        numRole.put("email", email);
+        numRole.put("password", PASSWORD);
+        numRole.put("fullName", "Coerce User");
+        numRole.put("role", 0); // số thay vì chuỗi enum
+        Resp r1 = post("/api/auth/register", numRole);
+        assertThat(r1.status()).isEqualTo(400);
+        assertThat((String) r1.body().get("code")).isEqualTo("INVALID_INPUT");
+
+        Map<String, Object> numPw = new LinkedHashMap<>();
+        numPw.put("email", email);
+        numPw.put("password", 12345678); // số thay vì chuỗi
+        numPw.put("fullName", "Coerce User");
+        numPw.put("role", "PASSENGER");
+        Resp r2 = post("/api/auth/register", numPw);
+        assertThat(r2.status()).isEqualTo(400);
+
+        Map<String, Object> numName = new LinkedHashMap<>();
+        numName.put("email", email);
+        numName.put("password", PASSWORD);
+        numName.put("fullName", 12345678); // số thay vì chuỗi
+        numName.put("role", "PASSENGER");
+        Resp r3 = post("/api/auth/register", numName);
+        assertThat(r3.status()).isEqualTo(400);
+
+        List<Integer> counts = jdbc.queryForList(
+                "SELECT count(*) FROM users WHERE email = ?", Integer.class, email);
+        assertThat(counts.get(0)).isEqualTo(0); // DB không đổi
+    }
+
+    /** F04: sai method -> 405 METHOD_NOT_ALLOWED; sai Content-Type -> 415 UNSUPPORTED_MEDIA_TYPE. */
+    @Test
+    void wrongMethodAndContentTypeReturnProperStatus() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        Resp m = putJson("/api/auth/login",
+                new LoginBody("m-" + UUID.randomUUID() + "@example.com", PASSWORD), correlation);
+        assertThat(m.status()).isEqualTo(405);
+        assertThat((String) m.body().get("code")).isEqualTo("METHOD_NOT_ALLOWED");
+        assertThat((String) m.body().get("correlationId")).isEqualTo(correlation);
+
+        Resp ct = postRaw("/api/auth/register", "not-json", "text/plain");
+        assertThat(ct.status()).isEqualTo(415);
+        assertThat((String) ct.body().get("code")).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+    }
+
     record RegisterBody(String email, String password, String fullName, String role) {
     }
 

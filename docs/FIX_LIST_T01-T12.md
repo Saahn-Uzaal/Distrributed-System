@@ -216,36 +216,41 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
 
 ## T07 — Security, error, correlation, log (cả 5 service)
 
-- [ ] **T07-1 — F01 + N10 (P1): Bỏ qua xác thực bằng biến thể URL**
+- [x] **T07-1 — F01 + N10 (P1): Bỏ qua xác thực bằng biến thể URL**
   - Vị trí: `driver-service/.../security/ApiSecurityFilter.java:51–65`; `trip-service/.../security/ApiSecurityFilter.java:47`; `identity-service/.../security/JwtAuthFilter.java:39`.
   - Vấn đề: filter so khớp `getRequestURI()` thô, trong khi MVC bỏ matrix parameter và decode trước khi định tuyến. Đã tái hiện: `PUT /internal;x/reservations/{id}` không có token → 201, driver chuyển RESERVED. Tương tự `/%69nternal/...`, `/api/trips;x` (bỏ qua kiểm tra role PASSENGER), `/api/auth/me;x` (→ 500).
   - Sửa: chuyển sang Spring Security `SecurityFilterChain` (dependency `spring-boot-starter-security`) với `authorizeHttpRequests` dùng `PathPatternRequestMatcher`, giữ `StrictHttpFirewall` mặc định (chặn `;`, `%2F`, `%25`, `..` → 400). JWT dùng `BearerTokenAuthenticationFilter` hoặc filter riêng đặt trong chain; internal token kiểm tra bằng matcher `/internal/**`. Mặc định `anyRequest().denyAll()` hoặc `authenticated()`, mở rõ ràng `/actuator/health/**`, `/api/auth/register`, `/api/auth/login`.
   - Kiểm chứng: test HTTP thật (Testcontainers) cho mỗi service với `;x`, `%69`, `//`, `/./`, chữ hoa, dấu `/` cuối trên mọi đường dẫn bảo vệ → 400/401/403 **và** assert DB không đổi.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): Spring Security `SecurityFilterChain` ở cả 5 service (`config/SecurityConfig.java`, `security/JwtAuthenticationFilter.java` đặt attribute `authenticatedUser`; driver thêm `InternalTokenFilter` constant-time cho `/internal/**`); firewall mặc định chặn matrix param. Xóa filter cũ (`JwtAuthFilter`, `ApiSecurityFilter`). Regression: `SecurityProbeTest` (driver + trip) — `;x`→400, `%69nternal`/`%61pi`→401, `//`, `/./`, chữ hoa→404, trailing slash; identity `AuthFlowIntegrationTest` assert DB không đổi. `mvnw clean verify`: 155 tests / 0 failures.
 
-- [ ] **T07-2 — N02 (P2): Backend lắng nghe trên mọi network interface**
+- [x] **T07-2 — N02 (P2): Backend lắng nghe trên mọi network interface**
   - Vị trí: `*/application.yml` (thiếu `server.address`).
   - Vấn đề: cổng 8081–8085 mở ra LAN, gồm `/internal/**` và `/actuator/**`, bỏ qua giới hạn của Nginx. Trái contract §2.
   - Sửa: `server.address: ${SERVER_ADDRESS:127.0.0.1}` khi chạy local trên host; khi container hóa (T29) đặt `0.0.0.0` nhưng không publish port. Cập nhật Nginx nếu cần.
   - Kiểm chứng: từ máy khác trong LAN, `curl http://<host>:8082/actuator/health` bị từ chối kết nối; qua `:8080` vẫn chạy.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `server.address: ${SERVER_ADDRESS:127.0.0.1}` trong cả 5 `application.yml`. Chạy driver-service trên host: netstat chỉ có `127.0.0.1:8082 LISTENING` (không có 0.0.0.0) → máy khác LAN bị từ chối kết nối. Từ container nginx qua `host.docker.internal` (resolve 192.168.65.254) **vẫn reach được** — Docker Desktop (Windows/Mac) route host.docker.internal về loopback của host, nên dev-mode gateway :8080 chạy với binding mặc định; kiểm chứng: `curl http://localhost:8080/api/drivers/status` → 401 JSON ApiError đầy đủ qua nginx. Ghi chú README §6 + comment compose/nginx.
 
-- [ ] **T07-3 — F02 (P2): JWT cắt phần lẻ NumericDate; `nbf:null` được bỏ qua**
+- [x] **T07-3 — F02 (P2): JWT cắt phần lẻ NumericDate; `nbf:null` được bỏ qua**
   - Vị trí: `identity-service/.../service/JwtService.java:133,137,141`; `driver-service/.../security/JwtVerifier.java:91,95,99`; `trip-service/.../security/JwtVerifier.java` (tương ứng).
   - Sửa: so sánh bằng giá trị thập phân (`BigDecimal` hoặc `doubleValue()` so với `Instant.now()` có phần mili giây), **hoặc** chốt và kiểm tra exp/nbf/iat phải là số nguyên. `nbf` có mặt mà là null → 401. Nếu dùng Spring Security (T07-1) thì dùng `JwtTimestampValidator` với skew 0.
   - Kiểm chứng: test token `exp = now + 0.5 s` (hợp lệ), `nbf = now + 0.9 s` (bị từ chối), `"nbf": null` (bị từ chối).
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `JwtService.authenticate`/`JwtVerifier.authenticate` so sánh exp/nbf bằng double (`Instant.now().toEpochMilli()/1000.0`); `"nbf": null` có mặt → 401. Test: token fractional-second trong SecurityProbeTest (driver/trip) + AuthFlowIntegrationTest (identity): exp=now+0.5s hợp lệ (đến dispatcher), nbf=now+0.9s→401, `"nbf":null`→401.
 
-- [ ] **T07-4 — F03 (P2): Jackson tự ép kiểu dữ liệu sai**
+- [x] **T07-4 — F03 (P2): Jackson tự ép kiểu dữ liệu sai**
   - Vị trí: Identity `web/dto/RegisterRequest.java:16`; Driver `web/dto/ReserveRequest.java:9` (và Confirm/Release/Finish); Trip `web/dto/QuoteRequest.java:6`.
   - Vấn đề: role nhận 0/1; password/fullName dạng số; `commandVersion: 1.9` thành 1; `distanceM`/`fareVnd` thập phân bị cắt; tọa độ dạng chuỗi `"10.7"` được nhận.
   - Sửa: cấu hình ObjectMapper từng service: tắt coercion scalar (`CoercionConfigs` cho Textual/Integer/Float → `Fail`), bật `FAIL_ON_NUMBERS_FOR_ENUMS`, tắt `ACCEPT_FLOAT_AS_INT`, bật `FAIL_ON_NULL_FOR_PRIMITIVES` (field nguyên thủy bị thiếu không âm thầm thành 0), cân nhắc `FAIL_ON_UNKNOWN_PROPERTIES`.
   - Kiểm chứng: test mỗi trường hợp trên → 400 `INVALID_INPUT`, DB không đổi.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): Boot 4 MVC dùng JsonMapper auto-config từ `JsonMapperBuilderCustomizer` (đã verify bằng javap spring-boot-jackson jar) — @Bean ObjectMapper cũ KHÔNG được dùng cho request binding (thử nghiệm: role=0 vẫn 201). Thay bằng bean `strictCoercionCustomizer` ở identity/driver/trip (`config/JacksonConfig.java`): int/long←String+Float→Fail, double←String→Fail, String←Integer+Float→Fail, Role enum←số→Fail (identity), + FAIL_ON_NULL_FOR_PRIMITIVES + FAIL_ON_UNKNOWN_PROPERTIES. Test: `role:0`, password/fullName dạng số, `commandVersion:1.9`, `attempt:"3"`, latitude `"10.7"` → tất cả 400 INVALID_INPUT; identity assert DB count không đổi (=0).
 
-- [ ] **T07-5 — F04 (P2): Lỗi phía client bị gom thành 500**
+- [x] **T07-5 — F04 (P2): Lỗi phía client bị gom thành 500**
   - Vị trí: `*/exception/GlobalExceptionHandler.java` — Identity/Trip dòng 77, Driver dòng 122, Matching/Payment dòng 43.
   - Vấn đề: `/api/trips?page=oops`, `size=2147483648`, `/api/trips/not-a-uuid`, sai method (405), sai media type (415), thiếu `@RequestAttribute`; Identity trả 500 cho path không tồn tại (thiếu handler `NoResourceFoundException`).
   - Sửa: thêm handler cho `MethodArgumentTypeMismatchException`, `MissingServletRequestParameterException`, `HttpRequestMethodNotSupportedException` (405), `HttpMediaTypeNotSupportedException` (415), `ServletRequestBindingException`, `NoResourceFoundException`; hoặc kế thừa `ResponseEntityExceptionHandler` rồi bọc lại thành ApiError. Các mã mới thêm vào contract §1.2.
   - Kiểm chứng: test từng trường hợp → đúng status và body ApiError có correlationId.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): thêm handler `HttpRequestMethodNotSupportedException`→405, `HttpMediaTypeNotSupportedException`→415 ở cả 5 GlobalExceptionHandler; identity thêm `NoResourceFoundException`→404 + `MissingServletRequestParameterException`/`MethodArgumentTypeMismatchException`. Test: DELETE trên endpoint POST-only→405, body text/plain→415 (cả hai có correlationId), `page=oops`, `size=2147483648`, `/api/trips/not-a-uuid`→400. Ghi chú: mã mới METHOD_NOT_ALLOWED/UNSUPPORTED_MEDIA_TYPE sẽ thêm vào contract §1.2 ở phase docs.
 
-- [ ] **T07-6 — F20 (P2): Log không xuống dòng giữa các event**
+- [x] **T07-6 — F20 (P2): Log không xuống dòng giữa các event**
   - Vị trí: `*/logging/JsonLogLayout.java:58–62` (×5).
   - Sửa: trả về `json + CoreConstants.LINE_SEPARATOR` ở cả nhánh chính và nhánh fallback.
   - Kiểm chứng: test qua `OutputStreamAppender` thật, ghi 3 event → đúng 3 dòng, mỗi dòng parse được bằng JSON. Build log không còn `}{"timestamp"` (hiện có 19 chỗ).
@@ -289,24 +294,27 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
 - [ ] **T07-14 — Q02 (P3): Chưa test framing nhiều event và stack trace**
   - Sửa: gộp chung với T07-6 và T07-7 (test qua appender thật).
 
-- [ ] **T07-15 — Q03 (P2): Security test chỉ dùng URL chuẩn**
+- [x] **T07-15 — Q03 (P2): Security test chỉ dùng URL chuẩn**
   - Sửa: gộp chung với T07-1, T07-3, T07-4. Bộ test phải có URL biến thể, NumericDate có phần lẻ, JSON sai kiểu và assert DB không đổi.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): bộ `SecurityProbeTest` (driver/trip) + `AuthFlowIntegrationTest` (identity) đã bao gồm URL biến thể (`;x`, `%69nternal`, `//`, `/./`, chữ hoa, trailing slash), NumericDate phần lẻ (exp/nbf fractional, nbf null), JSON sai kiểu (số cho int/enum/double, chuỗi cho double) và assert DB không đổi. 155 tests / 0 failures.
 
 ---
 
 ## T08 — Frontend + Nginx
 
-- [ ] **T08-1 — N01 (P2): Bỏ qua rate limit đăng nhập bằng `;`**
+- [x] **T08-1 — N01 (P2): Bỏ qua rate limit đăng nhập bằng `;`**
   - Vị trí: `deploy/nginx/nginx.conf` (`location = /api/auth/login` và `location /api/auth`).
   - Vấn đề: `/api/auth/login;x` rơi vào location không có rate limit (đã đo: 16 request đều 502, không lần nào 503).
   - Sửa: đặt `limit_req` cho toàn bộ `location /api/auth/` (riêng login giới hạn chặt hơn); chặn URI chứa `;` hoặc `%3B` ở cấp server (`if ($request_uri ~* "(;|%3b)") { return 400; }`); kết hợp với T07-1 để backend cũng từ chối.
   - Kiểm chứng: 16 lần `/api/auth/login;x` → bị 400 hoặc 429.
+  - ✅ Đã làm + kiểm chứng (2026-10-21): `nginx.conf` thêm server-level `if ($request_uri ~* "(;|%3b)") { return 400; }`; `limit_req` cho toàn bộ `/api/auth/` (zone auth_limit 10r/s burst=5) và riêng login chặt hơn (zone login_limit 5r/s burst=5, spec §11). Kiểm chứng thật qua :8080: `/api/auth/login;x` và `/api/auth/login%3Bx` → 400; burst 20 request tới `/api/auth/me` và `/api/auth/login` → mix 502/503 (limit_req hoạt động, trước đó toàn 502 không lần nào 503).
 
-- [ ] **T08-2 — N04 (P3): Location prefix không có ranh giới**
+- [x] **T08-2 — N04 (P3): Location prefix không có ranh giới**
   - Vị trí: `deploy/nginx/nginx.conf` (`/api/auth`, `/api/drivers`, `/api/trips`, `/api/notifications`).
   - Vấn đề: `/api/authx`, `/api/tripsfoo` bị proxy sang backend.
   - Sửa: dùng `location = /api/trips` + `location /api/trips/` (tương tự cho các route khác).
   - Kiểm chứng: `/api/authx` → 404 JSON (xem T08-5).
+  - ✅ Đã làm + kiểm chứng (2026-10-21): thay prefix location bằng cặp boundary `location = /api/X` + `location /api/X/` (proxy_pass kèm slash cuối) cho auth/drivers/trips/notifications. Kiểm chứng thật với backend chạy: `/api/driversfoo`, `/api/authx` → KHÔNG proxy (rơi SPA fallback HTML — JSON 404 đầy đủ theo T08-5, ghi nhận); exact `/api/drivers` và subpath `/api/drivers/status`, `/api/drivers/profile/{id}` proxy đúng tới driver (401 JSON ApiError).
 
 - [ ] **T08-3 — F22 (P2): Lỗi 502/504/rate-limit trả HTML**
   - Vị trí: `deploy/nginx/nginx.conf:49,84`.

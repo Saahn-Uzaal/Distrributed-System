@@ -1,6 +1,6 @@
 package com.ridehailing.identity.exception;
 
-import com.ridehailing.identity.security.JwtAuthFilter;
+import com.ridehailing.identity.security.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,9 +8,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -70,18 +75,48 @@ public class GlobalExceptionHandler {
             return build(HttpStatus.CONFLICT, "EMAIL_TAKEN", "Email is already registered.", null, req);
         }
         log.error("Data integrity violation other than users.email unique key (correlationId={})",
-                JwtAuthFilter.correlationId(req), e);
+                CorrelationIdFilter.resolve(req), e);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Internal server error.", null, req);
+    }
+
+    // F04 — lỗi phía client trả đúng status theo contract §1.2, không gom thành 500
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiError> noResource(NoResourceFoundException e, HttpServletRequest req) {
+        return build(HttpStatus.NOT_FOUND, "NOT_FOUND", "Resource not found.", null, req);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> methodNotAllowed(HttpRequestMethodNotSupportedException e, HttpServletRequest req) {
+        return build(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
+                "Method " + e.getMethod() + " is not supported for this endpoint.", null, req);
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiError> mediaTypeNotSupported(HttpMediaTypeNotSupportedException e, HttpServletRequest req) {
+        return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
+                "Content-Type " + e.getContentType() + " is not supported.", null, req);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiError> missingParam(MissingServletRequestParameterException e, HttpServletRequest req) {
+        return build(HttpStatus.BAD_REQUEST, "INVALID_INPUT",
+                "Missing required query parameter: " + e.getParameterName(), null, req);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> badParamType(MethodArgumentTypeMismatchException e, HttpServletRequest req) {
+        return build(HttpStatus.BAD_REQUEST, "INVALID_INPUT",
+                "Invalid value for query parameter: " + e.getName(), null, req);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> unexpected(Exception e, HttpServletRequest req) {
-        log.error("Unexpected error (correlationId={})", JwtAuthFilter.correlationId(req), e);
+        log.error("Unexpected error (correlationId={})", CorrelationIdFilter.resolve(req), e);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Internal server error.", null, req);
     }
 
     private ResponseEntity<ApiError> build(HttpStatus status, String code, String message, Object details,
                                            HttpServletRequest req) {
-        return ResponseEntity.status(status).body(new ApiError(code, message, JwtAuthFilter.correlationId(req), details));
+        return ResponseEntity.status(status).body(new ApiError(code, message, CorrelationIdFilter.resolve(req), details));
     }
 }

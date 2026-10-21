@@ -334,3 +334,24 @@ Theo yêu cầu người dùng, xử lý đủ R01–R07 rồi triển khai T11.
 - Không dùng DB nghiệp vụ dev hoặc khởi động port demo; không có Git metadata nên không tạo commit. Backup nguồn trước sửa lưu trong TEMP. Không tuyên bố đã chạy E2E lifecycle Nginx hoặc kill/restart JVM; test restart đóng rồi mở ứng dụng với cùng DB test.
 
 T11 DONE, R01–R07 đã xử lý. Chi tiết: [T11](tasks/T11.md), [nhật ký sửa](T09-T12_REVIEW_FIXES.md). T13/T14 vẫn TODO. Không có blocker còn lại trong phạm vi đã giao.
+
+## Lượt 2026-10-21 — FIX_LIST T01–T12: Phase 1 (C01–C03) + Phase 2 (T07 security F01/N10, N02, F02, F03, F04, Q03; nginx T08-1/T08-2)
+
+### Phase 1 — committed (`a135fc6`, `e8762da`, `1f308ae`)
+- C01: khởi tạo git repo + `.gitignore` (chặn `.env`, `keys/*.pem`, `target/`, `dist/`).
+- C02: chuyển 5 services + web vào `src/`; sửa pom modules/relativePath, compose bind-mount, README/docs paths. Verify lúc đó: `mvnw clean verify` 130/0, frontend 13/13, nginx serve :8080.
+- C03: ghi blocker trước T13 (F01+N10, N15/N21–N24/F31) trong handoff/backlog, trỏ `docs/FIX_LIST_T01-T12.md`.
+
+### Phase 2 — code + kiểm chứng thật (commit sau entry này)
+- **T07-1 (F01+N10):** Spring Security `SecurityFilterChain` ở cả 5 service (`config/SecurityConfig.java`, `security/JwtAuthenticationFilter.java` đặt request attribute `authenticatedUser`; JSON 401/403 handlers; driver thêm `InternalTokenFilter` constant-time cho `/internal/**`). Xóa filter cũ. Firewall mặc định chặn matrix param → 400.
+- **T07-2 (N02):** `server.address: ${SERVER_ADDRESS:127.0.0.1}` trong cả 5 yml. Kiểm chứng thật: chạy driver trên host → netstat chỉ `127.0.0.1:8082 LISTENING`; từ container nginx qua `host.docker.internal` (resolve 192.168.65.254) vẫn reach được — Docker Desktop route về loopback host, dev gateway :8080 chạy với binding mặc định (`curl http://localhost:8080/api/drivers/status` → 401 JSON qua nginx). Ghi chú README §6 + comment compose/nginx.
+- **T07-3 (F02):** exp/nbf so sánh bằng double; `"nbf": null` có mặt → 401. Test fractional-second trong SecurityProbeTest/AuthFlowIntegrationTest.
+- **T07-4 (F03):** Boot 4 MVC dùng JsonMapper auto-config từ `JsonMapperBuilderCustomizer` (verify javap) — @Bean ObjectMapper cũ không được dùng cho request binding (thử: role=0 vẫn 201). Thay bằng bean `strictCoercionCustomizer` ở identity/driver/trip; test sai kiểu → 400 INVALID_INPUT, DB không đổi.
+- **T07-5 (F04):** handler 405/415 (+ NoResourceFound/type-mismatch/missing-param ở identity) trong cả 5 GlobalExceptionHandler; test có correlationId. Mã mới METHOD_NOT_ALLOWED/UNSUPPORTED_MEDIA_TYPE chờ phase docs vào contract §1.2.
+- **T07-15 (Q03):** bộ probe test đủ URL biến thể + NumericDate phần lẻ + JSON sai kiểu + assert DB không đổi.
+- **T08-1 (N01) + T08-2 (N04), nginx.conf:** server-level `if ($request_uri ~* "(;|%3b)") return 400`; `limit_req` toàn `/api/auth/` (auth_limit 10r/s burst=5) + login riêng chặt hơn (login_limit 5r/s burst=5); boundary locations `location = /api/X` + `location /api/X/`. Kiểm chứng thật qua :8080: `;x`/`%3Bx` → 400; burst 20 req `/me`+`/login` → mix 502/503 (limit_req hoạt động); `/api/driversfoo`, `/api/authx` không proxy (SPA fallback — JSON 404 theo T08-5); exact/subpath proxy đúng tới driver chạy thật.
+- **Verify tổng:** `./mvnw -B clean verify` → BUILD SUCCESS, **155 tests / 0 failures** (identity 22, driver 78, trip 43, matching 6, payment 6) — gồm regression test mới của phase này.
+
+### Ghi chú kỹ thuật
+- Boot 4: MVC request binding dùng JsonMapper auto-config (`JacksonAutoConfiguration` + `JsonMapperBuilderCustomizer`) — custom @Bean ObjectMapper không áp dụng cho binding (đã verify javap trên jar local).
+- Docker Desktop Windows: `host.docker.internal` reach được process bind loopback (khác Linux) → dev-mode nginx proxy hoạt động với `SERVER_ADDRESS=127.0.0.1`.

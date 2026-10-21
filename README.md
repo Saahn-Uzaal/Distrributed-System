@@ -135,6 +135,7 @@ docker compose --env-file .env -f deploy/compose.yaml up -d nginx
 # mở http://localhost:8080 — login/register thật, route theo role
 ```
 - Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|notifications` tới services local trên host (dev mode qua `host.docker.internal`; T29 đổi sang DNS compose khi container hóa services). Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON từ trang lỗi tĩnh `src/web/public/errors/payload-too-large.json` (phải build frontend trước để file này có trong `dist/`).
+- **N02 — binding loopback:** mỗi service bind chỉ loopback bằng mặc định (`server.address: ${SERVER_ADDRESS:127.0.0.1}`); cổng 8081–8085 không mở ra LAN (netstat: chỉ `127.0.0.1:<port> LISTENING`). Trên Docker Desktop (Windows/Mac), `host.docker.internal` được route về loopback của host nên gateway :8080 **vẫn chạy** với binding mặc định (đã kiểm chứng 2026-10-21: driver trên `127.0.0.1:8082` reach từ container nginx; `curl http://localhost:8080/api/drivers/status` → 401 JSON qua nginx). Khi chạy services trong container (T29): set `SERVER_ADDRESS=0.0.0.0` và KHÔNG publish port.
 - Services log structured JSON (spec §11); env tùy chọn `INSTANCE_ID` đặt instanceId trong log (mặc định = UUID per JVM).
 - Dev server: `npm run dev` ở `src/web/` (:5173, có proxy `/api/*` tới :8081/:8082/:8083) — không cần nginx khi phát triển UI.
 - Token lưu trong sessionStorage; không log token (source + access log Nginx đều không chứa).

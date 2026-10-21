@@ -1,5 +1,7 @@
 server:
   port: 8082
+  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt SERVER_ADDRESS=0.0.0.0 nhưng không publish port.
+  address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
   application:

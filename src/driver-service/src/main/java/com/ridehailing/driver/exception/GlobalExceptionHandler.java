@@ -8,6 +8,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -104,6 +106,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(TombstonedReservationException.class)
     public ResponseEntity<ApiError> tombstoned(TombstonedReservationException e, HttpServletRequest req) {
         return build(HttpStatus.CONFLICT, "TOMBSTONED_RESERVATION", e.getMessage(), e.details(), req);
+    }
+
+    // F04 — lỗi phía client trả đúng status theo contract §1.2, không gom thành 500
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> methodNotAllowed(HttpRequestMethodNotSupportedException e, HttpServletRequest req) {
+        return build(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
+                "Method " + e.getMethod() + " is not supported for this endpoint.", null, req);
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiError> mediaTypeNotSupported(HttpMediaTypeNotSupportedException e, HttpServletRequest req) {
+        return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
+                "Content-Type " + e.getContentType() + " is not supported.", null, req);
     }
 
     // Tham số query sai kiểu/thiếu (candidates: lat/lng/radiusM/limit) -> 400 INVALID_INPUT

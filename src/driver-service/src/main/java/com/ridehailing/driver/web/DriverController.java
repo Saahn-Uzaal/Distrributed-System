@@ -1,6 +1,6 @@
 package com.ridehailing.driver.web;
 
-import com.ridehailing.driver.security.ApiSecurityFilter;
+import com.ridehailing.driver.security.JwtAuthenticationFilter;
 import com.ridehailing.driver.security.AuthenticatedUser;
 import com.ridehailing.driver.security.UnauthorizedException;
 import com.ridehailing.driver.service.DriverService;
@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * T09 — public API driver (contract api-contracts.md §3.2). Auth/role DRIVER enforce bởi
- * ApiSecurityFilter (T07); userId luôn lấy từ JWT, không tin client.
+ * SecurityFilterChain (T07-1: hasRole("DRIVER")); userId luôn lấy từ JWT, không tin client.
  */
 @RestController
 @RequestMapping("/api/drivers/me")
@@ -57,7 +57,7 @@ public class DriverController {
     }
 
     private static AuthenticatedUser principal(HttpServletRequest req) {
-        Object attr = req.getAttribute(ApiSecurityFilter.PRINCIPAL_ATTRIBUTE);
+        Object attr = req.getAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE);
         if (!(attr instanceof AuthenticatedUser user)) {
             throw new UnauthorizedException("Missing or invalid bearer token.");
         }

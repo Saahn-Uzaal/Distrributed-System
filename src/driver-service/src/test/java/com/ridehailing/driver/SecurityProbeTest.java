@@ -241,4 +241,172 @@ class SecurityProbeTest {
         assertThat(resp.status()).isEqualTo(200);
         assertThat(resp.body().get("status")).isEqualTo("UP");
     }
+
+    private Resp putJson(String path, Object body, String internalTokenHeader) throws Exception {
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+                .PUT(HttpRequest.BodyPublishers.ofByteArray(
+                        JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8)))
+                .header("Content-Type", "application/json");
+        if (internalTokenHeader != null) {
+            req.header("X-Internal-Token", internalTokenHeader);
+        }
+        HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    private Resp delete(String path, String bearerToken, String correlationHeader) throws Exception {
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).DELETE();
+        if (bearerToken != null) {
+            req.header("Authorization", "Bearer " + bearerToken);
+        }
+        if (correlationHeader != null) {
+            req.header("X-Correlation-ID", correlationHeader);
+        }
+        HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    // ---------- T07-15 (Q03) + F01 — biến thể URL trên path bảo vệ không được bỏ qua auth ----------
+
+    /** F01 repro: matrix parameter ';' trước đây lọt qua filter URI thô -> nay 400 từ StrictHttpFirewall. */
+    @Test
+    void matrixParameterOnInternalPathIsRejected() throws Exception {
+        Resp resp = put("/internal;x/reservations/" + UUID.randomUUID(), null);
+        assertThat(resp.status()).isEqualTo(400);
+
+        Resp api = get("/api/drivers/me/profile;x", null, null);
+        assertThat(api.status()).isEqualTo(400);
+    }
+
+    /** F01 repro: %69 decode thành 'i' -> /internal/... vẫn bắt buộc X-Internal-Token. */
+    @Test
+    void encodedInternalPathStillRequiresInternalCredential() throws Exception {
+        Resp resp = put("/%69nternal/reservations/" + UUID.randomUUID(), null);
+        assertThat(resp.status()).isEqualTo(401);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INTERNAL_CREDENTIAL");
+    }
+
+    /** '//' và '/./': bị container/firewall chặn (400) hoặc vẫn enforce auth (401/403); không bao giờ tới handler. */
+    @Test
+    void doubleSlashAndDotSegmentVariantsDoNotBypassAuth() throws Exception {
+        Resp dbl = put("/internal//reservations/" + UUID.randomUUID(), null);
+        assertThat(dbl.status()).isIn(400, 401);
+
+        Resp dot = get("/api/drivers/./me/profile", null, null);
+        assertThat(dot.status()).isIn(400, 401, 403, 404);
+    }
+
+    /** Path chữ hoa: không match case-insensitive -> resource lạ (404 JSON), không phải bypass. */
+    @Test
+    void uppercasePathIsNotFoundNotBypass() throws Exception {
+        Resp resp = get("/API/DRIVERS/me/profile", null, null);
+        assertThat(resp.status()).isEqualTo(404);
+        assertThat(resp.body().get("code")).isEqualTo("NOT_FOUND");
+    }
+
+    /** Trailing slash trên path bảo vệ: vẫn yêu cầu role DRIVER (không bypass bằng '/'). */
+    @Test
+    void trailingSlashOnProtectedPathStillRequiresAuth() throws Exception {
+        Resp resp = get("/api/drivers/me/profile/", null, null);
+        assertThat(resp.status()).isIn(401, 403, 404);
+    }
+
+    // ---------- T07-3 (F02) — NumericDate có phần giây lẻ ----------
+
+    /** F02: exp = now + 0.5 s vẫn hợp lệ; nbf tương lai hoặc "nbf": null -> 401. */
+    @Test
+    void fractionalSecondExpAcceptedAndNbfFutureOrNullRejected() throws Exception {
+        Map<String, Object> claims = baseClaims("DRIVER");
+        claims.put("exp", Instant.now().toEpochMilli() / 1000.0 + 0.5); // now + 0.5 s
+        Resp ok = get("/api/drivers/me/no-such-endpoint", sign(claims), null);
+        assertThat(ok.status()).isEqualTo(404); // filter chấp nhận -> dispatcher (không có mapping)
+
+        claims = baseClaims("DRIVER");
+        claims.put("nbf", Instant.now().toEpochMilli() / 1000.0 + 0.9); // chưa hiệu lực
+        Resp nbfFuture = get("/api/drivers/me/profile", sign(claims), null);
+        assertThat(nbfFuture.status()).isEqualTo(401);
+        assertThat(nbfFuture.body().get("code")).isEqualTo("UNAUTHORIZED");
+
+        claims = baseClaims("DRIVER");
+        claims.put("nbf", null); // có mặt nhưng null -> invalid (F02)
+        Resp nbfNull = get("/api/drivers/me/profile", sign(claims), null);
+        assertThat(nbfNull.status()).isEqualTo(401);
+        assertThat(nbfNull.body().get("code")).isEqualTo("UNAUTHORIZED");
+    }
+
+    // ---------- T07-4 (F03) — JSON sai kiểu không được ép kiểu ngầm ----------
+
+    /** F03: commandVersion 1.9 không được thành long 1 -> 400 INVALID_INPUT, DB không đổi. */
+    @Test
+    void fractionalCommandVersionRejected() throws Exception {
+        Map<String, Object> body = reserveBody(1.9); // float thay vì integer
+        Resp resp = putJson("/internal/reservations/" + UUID.randomUUID(), body, INTERNAL_TOKEN);
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+    }
+
+    /** F03: attempt dạng chuỗi "3" không được thành int 3 -> 400 INVALID_INPUT. */
+    @Test
+    void stringAttemptRejected() throws Exception {
+        Map<String, Object> body = reserveBody(1);
+        body.put("attempt", "3"); // String thay vì integer
+        Resp resp = putJson("/internal/reservations/" + UUID.randomUUID(), body, INTERNAL_TOKEN);
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+    }
+
+    /** F03: latitude dạng chuỗi "10.7" không được thành double -> 400 INVALID_INPUT. */
+    @Test
+    void stringLatitudeRejected() throws Exception {
+        Map<String, Object> body = reserveBody(1);
+        body.put("pickup", Map.of("latitude", "10.7769", "longitude", 106.7009));
+        Resp resp = putJson("/internal/reservations/" + UUID.randomUUID(), body, INTERNAL_TOKEN);
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+    }
+
+    private static Map<String, Object> reserveBody(Object commandVersion) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("commandId", UUID.randomUUID().toString());
+        body.put("commandVersion", commandVersion);
+        body.put("tripId", UUID.randomUUID().toString());
+        body.put("driverId", UUID.randomUUID().toString());
+        body.put("attempt", 1);
+        body.put("expiresAt", Instant.now().plusSeconds(3600).toString());
+        body.put("pickup", Map.of("latitude", 10.7769, "longitude", 106.7009));
+        body.put("destination", Map.of("latitude", 10.8000, "longitude", 106.7200));
+        body.put("distanceM", 3500L);
+        body.put("fareVnd", 45000L);
+        return body;
+    }
+
+    // ---------- T07-5 (F04) — lỗi phía client không được gom thành 500 ----------
+
+    /** F04: sai HTTP method -> 405 METHOD_NOT_ALLOWED kèm correlationId. */
+    @Test
+    void wrongMethodReturns405WithCorrelation() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        Resp resp = delete("/api/drivers/me/profile", validDriverToken(), correlation);
+        assertThat(resp.status()).isEqualTo(405);
+        assertThat(resp.body().get("code")).isEqualTo("METHOD_NOT_ALLOWED");
+        assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+    }
+
+    /** F04: sai Content-Type -> 415 UNSUPPORTED_MEDIA_TYPE kèm correlationId. */
+    @Test
+    void wrongContentTypeReturns415() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        HttpRequest req = HttpRequest.newBuilder(
+                        URI.create(BASE + "/internal/reservations/" + UUID.randomUUID()))
+                .PUT(HttpRequest.BodyPublishers.ofString("not-json"))
+                .header("Content-Type", "text/plain")
+                .header("X-Internal-Token", INTERNAL_TOKEN)
+                .header("X-Correlation-ID", correlation)
+                .build();
+        HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+        assertThat(resp.statusCode()).isEqualTo(415);
+        Map<String, Object> body = parse(resp.body());
+        assertThat(body.get("code")).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        assertThat(body.get("correlationId")).isEqualTo(correlation);
+    }
 }

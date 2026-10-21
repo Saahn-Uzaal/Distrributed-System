@@ -1,14 +1,16 @@
 # Handoff — trạng thái cho lượt kế tiếp
 
-Cập nhật: 2026-10-20, sau **sửa đủ R01–R07 của T09/T10/T12 và T11 DONE**. T01–T12 đều DONE; full repo `clean verify` **130 tests, 0 failures/errors/skipped**; frontend **13/13 test + build pass**. Chi tiết: [sửa review](T09-T12_REVIEW_FIXES.md), [T11](tasks/T11.md).
+Cập nhật: 2026-10-21, giữa đợt sửa **FIX_LIST T01–T12** (82 mục): phase 1 (C01–C03) và phase 2 (T07 security F01+N10, N02, F02, F03, F04, Q03; nginx T08-1/T08-2) **xong** — full repo `clean verify` **155 tests, 0 failures**; frontend 13/13. Trạng thái từng mục theo checkbox `[ ]/[x]` trong [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md); tiến độ + bằng chứng ở `docs/progress.md`. Lịch sử trước đó: R01–R07 của T09/T10/T12 và T11 DONE (130 tests lúc đó). Chi tiết: [sửa review](T09-T12_REVIEW_FIXES.md), [T11](tasks/T11.md).
 
 **Kết quả mới nhất:** Driver V4 + lifecycle confirm/release/finish, release-before-reserve tombstone, command claim nguyên tử, resource/operation hash, version bounds và expiry RESERVED. Trip V3 scope replay theo principal/operation/key, phân quyền qua driver_user_id, phân trang long. Candidates/event contract mang driverUserId tách biệt driverId. Test nâng cấp giữ replay cũ, contention qua deadline, fencing và restart ứng dụng đều pass. Chưa có publisher/matching/saga; không triển khai T13+ trong lượt này.
 
 ## ⚠️ Blocker trước T13 (C03)
 
-Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cần sửa**: [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md). **T13 (và mọi task mới) chỉ bắt đầu sau khi xong:**
-- **F01 + N10** (P1): bỏ qua xác thực bằng biến thể URL — phải sửa SecurityFilterChain ở cả 5 service trước.
-- **Mục contract T05**: N15 (`mandatory` + returns cho publisher), N21 (hành vi NoDriverFound/hết candidate), N22 (thời điểm ghi `trips.driver_id`), N23 (`x-dlq-reason` republish), N24 (release mọi reservationId bị bỏ), F31 (event hủy matching không tồn tại).
+Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cần sửa**: [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md). Đang xử lý theo thứ tự trong file (phase 1 C01–C03 và phase 2 security/nginx đã xong, đánh dấu `[x]` kèm bằng chứng).
+
+**T13 (và mọi task mới) chỉ bắt đầu sau khi xong các mục còn lại của FIX_LIST**, trong đó blocker chính còn lại:
+- **Mục contract T05**: N15 (`mandatory` + returns cho publisher), N21 (hành vi NoDriverFound/hết candidate), N22 (thời điểm ghi `trips.driver_id`), N23 (`x-dlq-reason` republish), N24 (release mọi reservationId bị bỏ), F31 (event hủy matching không tồn tại) — phase 3 của đợt sửa.
+- Các mục P2/P3 còn lại trong FIX_LIST (log T07-6..14, frontend T08-3..17, correctness/time T09–T12, infra/scripts).
 
 Trạng thái sửa theo dõi bằng checkbox `[ ]/[x]` trong chính file FIX_LIST; tiến độ từng pha ghi ở `docs/progress.md`.
 
@@ -35,12 +37,16 @@ Trạng thái sửa theo dõi bằng checkbox `[ ]/[x]` trong chính file FIX_LI
 - **T12 DONE** (2026-10-20): trip-service — migrations V2 (`trips` state CHECK 8 states + matching_attempt/driver_id/payment_status/payment_attempt; `outbox` id=eventId ổn định, status PENDING/SENT; `trip_events` enum §3.5; `idempotency_keys`). POST `/api/trips/quote` fare server-side (haversine R=6_371_008.8 m; `fareVnd = FARE_BASE_VND + ceil(distanceM/1000)*FARE_PER_KM_VND`, env mới 12000/5000); POST `/api/trips` Idempotency-Key UUID bắt buộc — claim bằng `ON CONFLICT (key) DO NOTHING` trong transaction, replay response gốc (`stored_response` JSONB `{status,body}`), khác payload → 409 `IDEMPOTENCY_MISMATCH`, thiếu/sai key → 400; 202 + `Location: /api/trips/{id}` body `{tripId,state:SEARCHING,matchingAttempt:1,createdAt}`. Cùng transaction: outbox PENDING `TripRequested` attempt 1 payload `{tripId,attempt:1,pickup,excludedDriverIds:[]}` + trip_event `TRIP_CREATED` v1. GET list phân trang §1.3 (clamp size 100; sort created_at DESC — chốt T12) WHERE passenger_id=caller OR driver_id=caller; GET detail owner/assigned-driver không thì 404. Chốt T12: outbox schema ở T12 (T13 chỉ thêm publisher worker); saga WAITING_MATCH = T16, notifications = T25 — chưa ghi. 11 integration tests mới (Testcontainers PG, port **18102**); SecurityProbeTest sửa sang H2 in-memory + probe path `/api/trips/{id}/events` (T25). Full repo `clean verify` **97/0**. Live probe nginx :8080: quote/create/replay/mismatch/list/get + psql verify outbox pending. Chi tiết: [T12.md](tasks/T12.md).
 - Toolchain host: JDK Temurin 21.0.12.1 + Maven 3.10.0 tại `~/dev-tools/` — cấu hình **cả JAVA_HOME và PATH** theo README trong mỗi terminal (quên PATH → chạy bằng JRE 1.8, đã gặp ở T08); Node v24.18.0 / npm 11.16.0; mirror Maven Central → repo1.maven.org trong `~/.m2/settings.xml` (chỉ trên host, không commit).
 - **Docker daemon**: bật bằng `powershell -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'"` nếu tắt (kiểm tra lại bằng `docker ps` đầu lượt); container `ridehailing-postgres`, `ridehailing-rabbitmq`, `ridehailing-nginx` healthy, volume giữ dữ liệu.
-- **Tiến trình Java**: identity-service :8081 + driver-service :8082 từ lượt T08 đã **dừng** (để chạy `clean verify` của đợt sửa R01–R07); hiện không có service Java nào chạy. Nginx container vẫn up (:8080). Muốn demo login tại http://localhost:8080: khởi động lại identity/driver theo runbook README (env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem`, driver thêm `INTERNAL_API_TOKEN`).
+- **Tiến trình Java**: hiện không có service Java nào chạy (driver vừa dừng sau kiểm chứng N02). Nginx container vẫn up (:8080) với config mới T08-1/T08-2 (đã reload). Muốn demo login tại http://localhost:8080: khởi động lại identity/driver theo runbook README (env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem`, driver thêm `INTERNAL_API_TOKEN`). Ghi chú N02: services bind loopback mặc định; trên Docker Desktop, gateway :8080 vẫn reach được qua `host.docker.internal` (xem README §6).
 - **Đợt sửa R01–R07** (2026-10-19): chi tiết + bằng chứng trong `docs/T07-T08_REVIEW_FIXES.md`. Điểm mới cho lượt sau: structured JSON logging ở cả 5 service (env tùy chọn `INSTANCE_ID`); security tests không cần PostgreSQL dev; frontend validation password theo byte UTF-8 (`src/web/src/auth/validation.ts`).
 - **Bất biến stack Boot 4 / Spring Security 7 (đã kiểm chứng trên jar thật)**: `Jwt.builder()`/NimbusJwtEncoder API cũ đã bỏ → dùng Nimbus JOSE JWT trực tiếp; Nimbus 10 package mới (`com.nimbusds.jose.JWSObject`, `crypto.RSASSAVerifier`); Boot 4 Jackson = **Jackson 3** (`tools.jackson.databind.ObjectMapper`), không có `TestRestTemplate`/`@AutoConfigureMockMvc`; Boot 4 BOM **không quản lý** Testcontainers/Nimbus → pin explicit trong root pom; path lạ ném `NoResourceFoundException` (handler 404 JSON đã có ở cả 5 service).
 - Git Bash: lệnh docker exec với đường dẫn Unix phải dùng `MSYS_NO_PATHCONV=1` (MSYS tự chuyển `/var/...` → `D:/Git/var/...`). nginx:alpine symlink access.log → /dev/stdout → xem log bằng `docker logs ridehailing-nginx`.
 
-## Task kế tiếp đề xuất (chưa thực hiện) — T13 hoặc T14
+## Task kế tiếp đề xuất (chưa thực hiện)
+
+**Đang giữa đợt sửa FIX_LIST_T01-T12** — bước tiếp theo là **phase 3**: mục contract T05 (F31, N15, N21–N24; docs-only) + thêm mã lỗi mới của F04 (`METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`) vào `docs/api-contracts.md` §1.2; rồi các phase còn lại theo thứ tự trong file.
+
+### T13 hoặc T14 (chỉ sau khi FIX_LIST xong)
 ### A. T13 — Outbox publisher Trip (owner A, tiếp nối T12)
 - Phạm vi (spec §20.4): **Trip outbox schema/worker, publisher confirms, retry publish với eventId ổn định; phát TripRequested**.
 - Trạng thái hiện có: bảng `outbox` + row PENDING đã tạo ở T12 — T13 chỉ cần worker scan pending → build envelope chuẩn (eventId = outbox.id, producer `trip-service`, correlationId giữ nguyên, schemaVersion 1) → publish persistent + confirms qua RabbitMQ (`ride.events` rk `trip.requested`) → đánh dấu SENT; retry transient theo events.md §4.3.

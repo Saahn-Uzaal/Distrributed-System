@@ -1,7 +1,7 @@
 package com.ridehailing.identity.web;
 
 import com.ridehailing.identity.security.AuthenticatedUser;
-import com.ridehailing.identity.security.JwtAuthFilter;
+import com.ridehailing.identity.security.JwtAuthenticationFilter;
 import com.ridehailing.identity.service.UserService;
 import com.ridehailing.identity.web.dto.LoginRequest;
 import com.ridehailing.identity.web.dto.LoginResponse;
@@ -39,7 +39,7 @@ public class AuthController {
     }
 
     @GetMapping("/me")
-    public UserResponse me(@RequestAttribute(JwtAuthFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser principal) {
+    public UserResponse me(@RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser principal) {
         return users.profile(principal.userId());
     }
 }

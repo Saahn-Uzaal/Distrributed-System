@@ -124,21 +124,24 @@ public class JwtService {
             throw new UnauthorizedException("Token not issued for this service.");
         }
 
-        // Temporal claims (F01): exp bắt buộc + chưa hết hạn; nbf nếu có phải đã hiệu lực. Skew = 0s.
-        long nowEpoch = Instant.now().getEpochSecond();
+        // Temporal claims (F01/F02): exp bắt buộc + chưa hết hạn; nbf có mặt phải đã hiệu lực. Skew = 0s.
+        // F02: NumericDate được phép mang phần giây lẻ — so sánh bằng double với now chính xác đến
+        // mili giây, KHÔNG cắt xuống giây nguyên (exp = now + 0.5 s vẫn hợp lệ).
+        // "nbf": null có mặt trong payload -> invalid (401), không bỏ qua.
+        double nowEpochSeconds = Instant.now().toEpochMilli() / 1000.0;
         Object expRaw = claims.get("exp");
         if (!(expRaw instanceof Number expNum)) {
             throw new UnauthorizedException("Token 'exp' claim is missing or invalid.");
         }
-        if (expNum.longValue() <= nowEpoch) {
+        if (expNum.doubleValue() <= nowEpochSeconds) {
             throw new UnauthorizedException("Invalid or expired token.");
         }
-        Object nbfRaw = claims.get("nbf");
-        if (nbfRaw != null) {
+        if (claims.containsKey("nbf")) {
+            Object nbfRaw = claims.get("nbf");
             if (!(nbfRaw instanceof Number nbfNum)) {
                 throw new UnauthorizedException("Token 'nbf' claim is invalid.");
             }
-            if (nbfNum.longValue() > nowEpoch) {
+            if (nbfNum.doubleValue() > nowEpochSeconds) {
                 throw new UnauthorizedException("Invalid or expired token.");
             }
         }

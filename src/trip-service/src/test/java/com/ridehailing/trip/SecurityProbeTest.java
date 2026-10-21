@@ -243,4 +243,149 @@ class SecurityProbeTest {
         assertThat(resp.status()).isEqualTo(200);
         assertThat(resp.body().get("status")).isEqualTo("UP");
     }
+
+    private Resp delete(String path, String bearerToken, String correlationHeader) throws Exception {
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path)).DELETE();
+        if (bearerToken != null) {
+            req.header("Authorization", "Bearer " + bearerToken);
+        }
+        if (correlationHeader != null) {
+            req.header("X-Correlation-ID", correlationHeader);
+        }
+        HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    private Resp postText(String path, String rawBody, String bearerToken, String correlationHeader) throws Exception {
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(BASE + path))
+                .POST(HttpRequest.BodyPublishers.ofString(rawBody))
+                .header("Content-Type", "text/plain");
+        if (bearerToken != null) {
+            req.header("Authorization", "Bearer " + bearerToken);
+        }
+        if (correlationHeader != null) {
+            req.header("X-Correlation-ID", correlationHeader);
+        }
+        HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    // ---------- T07-15 (Q03) + F01 — biến thể URL trên path bảo vệ không được bỏ qua auth ----------
+
+    /** F01 repro: matrix parameter ';' trước đây lọt qua filter URI thô -> nay 400 từ StrictHttpFirewall. */
+    @Test
+    void matrixParameterOnQuotePathIsRejected() throws Exception {
+        Resp resp = post("/api/trips/quote;x", QUOTE_BODY, null, null);
+        assertThat(resp.status()).isEqualTo(400);
+    }
+
+    /** F01 repro: %61 decode thành 'a' -> /api/trips/quote vẫn bắt buộc role PASSENGER. */
+    @Test
+    void encodedApiPathStillRequiresAuth() throws Exception {
+        Resp resp = post("/%61pi/trips/quote", QUOTE_BODY, null, null);
+        assertThat(resp.status()).isEqualTo(401);
+        assertThat(resp.body().get("code")).isEqualTo("UNAUTHORIZED");
+    }
+
+    /** '//' và '/./': bị container/firewall chặn (400) hoặc vẫn enforce auth (401/403); không bao giờ tới handler. */
+    @Test
+    void doubleSlashAndDotSegmentVariantsDoNotBypassAuth() throws Exception {
+        Resp dbl = get("/api//notifications", null, null);
+        assertThat(dbl.status()).isIn(400, 401, 403, 404);
+
+        Resp dot = post("/api/trips/./quote", QUOTE_BODY, null, null);
+        assertThat(dot.status()).isIn(400, 401, 403, 404);
+    }
+
+    /** Path chữ hoa: không match case-insensitive -> resource lạ (404 JSON), không phải bypass. */
+    @Test
+    void uppercasePathIsNotFoundNotBypass() throws Exception {
+        Resp resp = get("/API/TRIPS", null, null);
+        assertThat(resp.status()).isEqualTo(404);
+        assertThat(resp.body().get("code")).isEqualTo("NOT_FOUND");
+    }
+
+    /** Trailing slash trên path bảo vệ: vẫn yêu cầu xác thực (không bypass bằng '/'). */
+    @Test
+    void trailingSlashOnProtectedPathStillRequiresAuth() throws Exception {
+        Resp resp = get("/api/notifications/", null, null);
+        assertThat(resp.status()).isIn(401, 403, 404);
+    }
+
+    // ---------- T07-3 (F02) — NumericDate có phần giây lẻ ----------
+
+    /** F02: exp = now + 0.5 s vẫn hợp lệ; nbf tương lai hoặc "nbf": null -> 401. */
+    @Test
+    void fractionalSecondExpAcceptedAndNbfFutureOrNullRejected() throws Exception {
+        Map<String, Object> claims = baseClaims("PASSENGER");
+        claims.put("exp", Instant.now().toEpochMilli() / 1000.0 + 0.5); // now + 0.5 s
+        Resp ok = post("/api/trips/quote", QUOTE_BODY, sign(claims), null);
+        assertThat(ok.status()).isEqualTo(200); // filter chấp nhận -> quote tính được (không chạm DB)
+
+        claims = baseClaims("PASSENGER");
+        claims.put("nbf", Instant.now().toEpochMilli() / 1000.0 + 0.9); // chưa hiệu lực
+        Resp nbfFuture = post("/api/trips/quote", QUOTE_BODY, sign(claims), null);
+        assertThat(nbfFuture.status()).isEqualTo(401);
+        assertThat(nbfFuture.body().get("code")).isEqualTo("UNAUTHORIZED");
+
+        claims = baseClaims("PASSENGER");
+        claims.put("nbf", null); // có mặt nhưng null -> invalid (F02)
+        Resp nbfNull = post("/api/trips/quote", QUOTE_BODY, sign(claims), null);
+        assertThat(nbfNull.status()).isEqualTo(401);
+        assertThat(nbfNull.body().get("code")).isEqualTo("UNAUTHORIZED");
+    }
+
+    // ---------- T07-4 (F03) — JSON sai kiểu không được ép kiểu ngầm ----------
+
+    /** F03: latitude dạng chuỗi "10.7" không được thành double -> 400 INVALID_INPUT, không tạo trip. */
+    @Test
+    void stringCoordinatesRejected() throws Exception {
+        Map<String, Object> body = Map.of(
+                "pickup", Map.of("latitude", "10.7769", "longitude", 106.7009),
+                "destination", Map.of("latitude", 10.8000, "longitude", 106.7200));
+        Resp resp = post("/api/trips/quote", body, sign(baseClaims("PASSENGER")), null);
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+    }
+
+    // ---------- T07-5 (F04) — lỗi phía client không được gom thành 500 ----------
+
+    /** F04: sai HTTP method -> 405 METHOD_NOT_ALLOWED kèm correlationId. */
+    @Test
+    void wrongMethodReturns405WithCorrelation() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        Resp resp = delete("/api/trips/quote", sign(baseClaims("PASSENGER")), correlation);
+        assertThat(resp.status()).isEqualTo(405);
+        assertThat(resp.body().get("code")).isEqualTo("METHOD_NOT_ALLOWED");
+        assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+    }
+
+    /** F04: sai Content-Type -> 415 UNSUPPORTED_MEDIA_TYPE kèm correlationId. */
+    @Test
+    void wrongContentTypeReturns415() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        Resp resp = postText("/api/trips/quote", "not-json", sign(baseClaims("PASSENGER")), correlation);
+        assertThat(resp.status()).isEqualTo(415);
+        assertThat(resp.body().get("code")).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+        assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+    }
+
+    /** F04: page=oops / size vượt int range -> 400 INVALID_INPUT, không 500. */
+    @Test
+    void badPageAndSizeParamsReturn400() throws Exception {
+        Resp oops = get("/api/trips?page=oops", sign(baseClaims("PASSENGER")), null);
+        assertThat(oops.status()).isEqualTo(400);
+        assertThat(oops.body().get("code")).isEqualTo("INVALID_INPUT");
+
+        Resp bigSize = get("/api/trips?size=2147483648", sign(baseClaims("PASSENGER")), null);
+        assertThat(bigSize.status()).isEqualTo(400);
+    }
+
+    /** F04: path variable không phải UUID -> 400 INVALID_INPUT, không 500. */
+    @Test
+    void nonUuidTripIdReturns400() throws Exception {
+        Resp resp = get("/api/trips/not-a-uuid", sign(baseClaims("PASSENGER")), null);
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+    }
 }

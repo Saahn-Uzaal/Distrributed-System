@@ -330,26 +330,29 @@ class TripIntegrationTest {
         assertThat(replay.body().get("tripId")).isEqualTo(first.body().get("tripId"));
     }
 
-    /** T12-5 (N32): list chạy REPEATABLE READ — totalElements luôn khớp content dù có create đồng thời. */
+    /** T12-5 (N32): list chạy REPEATABLE READ — totalElements luôn khớp content dù có create đồng thời.
+     * T12-6: mỗi passenger chỉ được 1 trip chưa terminal -> 6 passenger khác nhau, tất cả tạo
+     * đồng thời với list; snapshot RR của firstPassenger thấy 0 hoặc 1 row nhưng count/content
+     * vẫn cùng một snapshot. */
     @org.junit.jupiter.api.Test
     void listUnderRepeatableReadStaysConsistentWithConcurrentCreates() throws Exception {
-        UUID passenger = UUID.randomUUID();
-        String token = token(passenger, "PASSENGER");
-
-        for (int i = 0; i < 2; i++) {
-            Resp c = send("POST", "/api/trips", token, Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY);
-            assertThat(c.status()).isEqualTo(202);
+        UUID firstPassenger = UUID.randomUUID();
+        String firstToken = token(firstPassenger, "PASSENGER");
+        List<UUID> passengers = new java.util.ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            passengers.add(i == 0 ? firstPassenger : UUID.randomUUID());
         }
 
-        var executor = Executors.newFixedThreadPool(5);
+        var executor = Executors.newFixedThreadPool(7);
         try {
             List<java.util.concurrent.Future<Resp>> creates = new java.util.ArrayList<>();
-            for (int i = 0; i < 4; i++) {
-                creates.add(executor.submit(() -> send("POST", "/api/trips", token,
+            for (UUID p : passengers) {
+                String t = token(p, "PASSENGER");
+                creates.add(executor.submit(() -> send("POST", "/api/trips", t,
                         Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY)));
             }
             java.util.concurrent.Future<Resp> listFuture = executor.submit(
-                    () -> send("GET", "/api/trips?page=0&size=20", token, Map.of(), null));
+                    () -> send("GET", "/api/trips?page=0&size=20", firstToken, Map.of(), null));
             for (var f : creates) {
                 Resp r = f.get(15, TimeUnit.SECONDS);
                 assertThat(r.status()).isEqualTo(202);
@@ -360,12 +363,69 @@ class TripIntegrationTest {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> content = (List<Map<String, Object>>) list.body().get("content");
             long totalElements = ((Number) list.body().get("totalElements")).longValue();
-            // Snapshot REPEATABLE READ: size=20 bao phủ mọi row -> totalElements == |content|.
+            // Snapshot REPEATABLE READ: count và content đọc cùng một snapshot -> luôn khớp.
             assertThat(totalElements).isEqualTo(content.size());
-            assertThat(content.size()).isBetween(2, 6);
+            // firstPassenger tối đa 1 trip chưa terminal (T12-6).
+            assertThat(content.size()).isBetween(0, 1);
 
-            long finalCount = jdbc.queryForObject("SELECT COUNT(*) FROM trips WHERE passenger_id=?", Long.class, passenger);
+            long finalCount = jdbc.queryForObject("SELECT COUNT(*) FROM trips", Long.class);
             assertThat(finalCount).isEqualTo(6);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /** T12-6 (N28): passenger đã có trip chưa terminal -> create mới trả 409 ACTIVE_TRIP_EXISTS,
+     * không tạo trip thứ hai, và key thất bại KHÔNG bị tiêu thụ (claim rollback cùng transaction). */
+    @org.junit.jupiter.api.Test
+    void secondCreateForSamePassengerReturns409ActiveTripExists() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        String tokenStr = token(passenger, "PASSENGER");
+
+        Resp first = send("POST", "/api/trips", tokenStr, Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY);
+        assertThat(first.status()).isEqualTo(202);
+
+        String secondKey = UUID.randomUUID().toString();
+        Resp second = send("POST", "/api/trips", tokenStr, Map.of("Idempotency-Key", secondKey), QUOTE_BODY);
+        assertThat(second.status()).isEqualTo(409);
+        assertThat(second.body().get("code")).isEqualTo("ACTIVE_TRIP_EXISTS");
+
+        // Chỉ một trip tồn tại; key thứ hai không được ghi (rollback cùng transaction).
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM trips WHERE passenger_id=?", Integer.class, passenger)).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM idempotency_keys WHERE principal_id = ? AND operation = 'CREATE_TRIP'",
+                Integer.class, passenger)).isEqualTo(1);
+
+        // Replay key thứ nhất vẫn trả 202 gốc.
+        UUID firstKey = (UUID) jdbc.queryForObject(
+                "SELECT key FROM idempotency_keys WHERE principal_id = ? AND operation = 'CREATE_TRIP'",
+                UUID.class, passenger);
+        Resp replay = send("POST", "/api/trips", tokenStr, Map.of("Idempotency-Key", firstKey.toString()), QUOTE_BODY);
+        assertThat(replay.status()).isEqualTo(202);
+        assertThat(replay.body().get("tripId")).isEqualTo(first.body().get("tripId"));
+    }
+
+    /** T12-6 (N28): 2 create đồng thời cùng passenger, key khác nhau -> đúng một 202 và một 409. */
+    @org.junit.jupiter.api.Test
+    void concurrentCreatesForSamePassengerYieldOne202AndOne409() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        String tokenStr = token(passenger, "PASSENGER");
+
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<Resp> a = executor.submit(
+                    () -> send("POST", "/api/trips", tokenStr, Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY));
+            java.util.concurrent.Future<Resp> b = executor.submit(
+                    () -> send("POST", "/api/trips", tokenStr, Map.of("Idempotency-Key", UUID.randomUUID().toString()), QUOTE_BODY));
+            Resp ra = a.get(15, TimeUnit.SECONDS);
+            Resp rb = b.get(15, TimeUnit.SECONDS);
+
+            int statuses = (ra.status() == 202 ? 1 : 0) + (rb.status() == 202 ? 1 : 0);
+            assertThat(statuses).isEqualTo(1);
+            Resp conflict = ra.status() == 409 ? ra : rb;
+            assertThat(conflict.body().get("code")).isEqualTo("ACTIVE_TRIP_EXISTS");
+
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM trips WHERE passenger_id=?", Integer.class, passenger)).isEqualTo(1);
         } finally {
             executor.shutdownNow();
         }

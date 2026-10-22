@@ -3,18 +3,25 @@
 Prototype hệ thống đặt xe mô phỏng Grab/Uber cho môn Distributed Systems.
 5 business microservices chạy độc lập, giao tiếp qua REST + RabbitMQ (message queue), mỗi service có database riêng trên PostgreSQL; triển khai bằng Docker Compose.
 
-> **Trạng thái hiện tại (20/10/2026): T01–T12 DONE; đã sửa đủ R01–R07 của review T09/T10/T12.** Backend `clean verify` BUILD SUCCESS — **130 tests, 0 failures/errors/skipped** (Identity 19, Driver 67, Trip 32, Matching 6, Payment 6). Frontend test **13/13**, build thành công. T11 có confirm/release/finish, tombstone, fencing và expiry RESERVED; test restart ứng dụng giữ CONFIRMED/BUSY và hồi phục RESERVED quá hạn. Chi tiết: [T11](docs/tasks/T11.md), [sửa review](docs/T09-T12_REVIEW_FIXES.md). T13/T14 còn TODO; chưa có luồng matching/saga đầu cuối.
+> **Trạng thái hiện tại (22/10/2026): T01–T12 DONE + toàn bộ FIX_LIST T01–T12 đã khắc phục** (82 mục, xem [docs/FIX_LIST_T01-T12.md](docs/FIX_LIST_T01-T12.md)). Backend `clean verify` BUILD SUCCESS — **220 tests, 0 failures/errors/skipped** (Identity 36, Driver 105, Trip 59, Matching 10, Payment 10). Frontend test **43/43**, build thành công. T11 có confirm/release/finish, tombstone, fencing và expiry RESERVED; test restart ứng dụng giữ CONFIRMED/BUSY và hồi phục RESERVED quá hạn. Chi tiết: [T11](docs/tasks/T11.md), [sửa review](docs/T09-T12_REVIEW_FIXES.md). T13/T14 còn TODO; chưa có luồng matching/saga đầu cuối.
 
 ## Stack
 
-| Thành phần | Lựa chọn |
+| Thành phần | Lựa chọn (khớp các `pom.xml` hiện tại) |
 |---|---|
 | Backend | Java 21, Spring Boot 4.1.1, Maven Wrapper |
-| API | Spring Web MVC (starter `spring-boot-starter-webmvc`) |
-| Persistence | PostgreSQL + Flyway (từ task T03) |
-| Messaging | RabbitMQ + Spring AMQP (từ task T04) |
+| API | Spring Web MVC (starter `spring-boot-starter-webmvc`) + validation |
+| Persistence | PostgreSQL + Flyway; **JdbcTemplate** ở driver/trip/matching/payment, chỉ identity-service dùng JPA — xem mục "Lệch đặc tả có chủ đích" |
+| Security | Spring Security mới dùng phần crypto (BCrypt) + JWT filter tự viết (nimbus-jose-jwt); chưa dùng authorization model đầy đủ của Spring Security |
+| Messaging | RabbitMQ: hạ tầng sẵn sàng (compose + declare topology từ T04), **chưa có `spring-boot-starter-amqp` trong POM** — publisher/consumer worker thuộc T13/T14 |
 | Frontend | React + TypeScript + Vite + Ant Design (từ task T08) |
 | Deploy | Docker Compose + Nginx (từ task T29) |
+
+### Lệch đặc tả có chủ đích
+
+- **JdbcTemplate thay JPA** (driver/trip/matching/payment): các thao tác quan trọng cần SQL tường minh và kiểm chứng được — CAS fencing trên `drivers.status` + `current_reservation_id`/`current_trip_id`, claim idempotency bằng `INSERT ... ON CONFLICT DO NOTHING` trong transaction, advisory lock theo passenger (`pg_advisory_xact_lock`), isolation `REPEATABLE READ` cho list. JPA sẽ che các bước này và khó audit hơn. identity-service dùng JPA vì chỉ là CRUD user đơn giản.
+- **RabbitMQ chưa có client AMQP**: topology (exchange/queue/DLX) đã declare sẵn từ T04, nhưng service chưa phát/nhận message — outbox pattern ghi ý định vào DB; worker publish/consume thuộc T13/T14. Khi đó mới thêm `spring-boot-starter-amqp`.
+- **Spring Security crypto-only**: verify JWT tự viết (RS256 + allowlist alg + iss/aud) và BCrypt cho password — đủ cho MVP, không cần security model đầy đủ.
 
 ## Modules & ports nội bộ
 
@@ -161,3 +168,5 @@ Theo đề §10.1 và đặc tả mục 16 (C02):
 - `docs/progress.md` — tiến độ từng lượt, lệnh đã chạy, kết quả thật
 - `docs/handoff.md` — trạng thái cho lượt tiếp theo
 - `docs/tasks/Txx.md` — nhật ký chi tiết mỗi task
+- `docs/openapi.yaml` — OpenAPI các endpoint đã triển khai (T06/T09/T11/T12)
+- `docs/FIX_LIST_T01-T12.md` — danh sách 82 mục rà soát T01–T12, trạng thái và bằng chứng kiểm chứng

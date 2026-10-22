@@ -179,6 +179,10 @@ public class DriverService {
         if (displayName == null || displayName.length() < 2 || displayName.length() > 60) {
             throw new InvalidInputException("displayName must be 2-60 characters.");
         }
+        // F05 (T06-1): từ chối ký tự điều khiển (\p{Cc}, đặc biệt \u0000) — PostgreSQL sẽ lỗi → 500.
+        if (displayName.codePoints().anyMatch(Character::isISOControl)) {
+            throw new InvalidInputException("displayName must not contain control characters.");
+        }
         if (plateNumber == null || plateNumber.length() < 3 || plateNumber.length() > 20
                 || !plateNumber.matches("^[A-Z0-9.\\- ]+$")) {
             throw new InvalidInputException(

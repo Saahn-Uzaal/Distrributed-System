@@ -65,11 +65,12 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
   - Sửa: thêm mục "Blocker trước T13" trỏ tới file này. Ghi rõ T13 chỉ bắt đầu sau khi xong F01/N10 và các mục contract T05 (N15, N21–N24, F31). Cột Blocker của T13/T14/T16 ghi các ID tương ứng.
   - Kiểm chứng: một người đọc handoff sẽ thấy ngay danh sách blocker.
 
-- [ ] **C04 — N38 (P3): Stack thực tế lệch spec §4 mà không ghi lý do**
+- [x] **C04 — N38 (P3): Stack thực tế lệch spec §4 mà không ghi lý do**
   - Vị trí: `README.md` mục Stack; các `pom.xml`.
   - Vấn đề: README ghi "RabbitMQ + Spring AMQP (từ T04)" nhưng chưa POM nào có `spring-boot-starter-amqp`. Chưa có OpenAPI. Chỉ Identity dùng JPA (các service còn lại dùng JdbcTemplate). Spring Security mới chỉ dùng phần crypto.
   - Sửa: sửa README cho đúng hiện trạng; thêm một mục "Lệch đặc tả có chủ đích" (JdbcTemplate thay JPA, lý do). Tạo OpenAPI (springdoc hoặc file `docs/openapi.yaml`) cho các endpoint đã có của T06/T09/T12.
   - Kiểm chứng: README khớp các POM; có OpenAPI cho Identity/Driver/Trip.
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): bảng Stack trong `README.md` viết lại khớp các `pom.xml` thật (grep artifactId xác nhận: không có `spring-boot-starter-amqp`, chỉ identity-service có `spring-boot-starter-data-jpa`, security crypto-only); thêm mục "Lệch đặc tả có chủ đích" (JdbcTemplate vs JPA — CAS fencing, ON CONFLICT DO NOTHING, advisory lock, REPEATABLE READ; RabbitMQ topology sẵn nhưng client AMQP thuộc T13/T14). Tạo `docs/openapi.yaml` (OpenAPI 3.0.3) phủ đủ endpoint đã có: identity register/login/me (T06), driver public profile/availability/location + internal candidates/reserve/get/confirm/release/finish (T09/T11), trip quote/create/list/get (T12); DTO/schemas đối chiếu trực tiếp với record trong code.
 
 - [x] **C05 — N19 (P3): Line ending lẫn lộn, Node chưa pin**
   - Vị trí: root (thiếu `.gitattributes`); `src/web/package.json` (thiếu `engines`); không có `.nvmrc`.
@@ -78,11 +79,12 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
   - Kiểm chứng: `file scripts/*.sh infra/**/*.sh` không còn CRLF; `npm ci` báo lỗi khi sai phiên bản Node.
   - ✅ Đã làm + kiểm chứng (Phase 6): thêm `.gitattributes` (`* text=auto eol=lf`, `*.cmd`/`*.bat` = crlf); normalize 163 file CRLF → LF (chỉ `mvnw.cmd` giữ CRLF — grep xác nhận không còn CRLF nào khác); `"engines": {"node": "24.x"}` trong `src/web/package.json` + `.nvmrc` = 24.18.0; `generate-dev-keys.sh` chạy end-to-end trên Linux qua `docker run ubuntu:24.04` (openssl cài in-container) → exit 0.
 
-- [ ] **C06 — N17 (P3): Không retry khi khởi động, chưa có liveness/readiness**
+- [x] **C06 — N17 (P3): Không retry khi khởi động, chưa có liveness/readiness**
   - Vị trí: `*/config/FlywayConfig.java`; `*/application.yml` (5 service).
   - Vấn đề: DB chưa sẵn sàng là service dừng ngay (Flyway migrate chạy trong lúc khởi tạo bean). Probe liveness/readiness chưa bật; timeout kết nối DB để mặc định 30 s. Spec §5 và §12 yêu cầu startup retry thật và kiểm tra dependency có timeout.
   - Sửa: bật `management.endpoint.health.probes.enabled=true`; đặt `spring.datasource.hikari.connection-timeout` (ví dụ 2000 ms) và `initialization-fail-timeout`; thêm retry có giới hạn quanh `flyway.migrate()` (hoặc `restart: on-failure` khi container hóa ở T29, kèm ghi chú).
   - Kiểm chứng: khởi động service khi Postgres đang tắt, bật Postgres trong 30 s → service tự lên; `/actuator/health/readiness` trả DOWN khi DB tắt và UP khi DB lên.
+  - ✅ Đã làm + kiểm chứng (Phase 8): cả 5 `FlywayConfig.java` dùng wrapper bean `FlywayMigrationRunner` (`initMethod=migrateWithRetry`, retry 10×2000 ms qua `app.flyway.retry-attempts`/`retry-delay-ms`, log warn từng lần, fail-fast sau lần cuối). Cả 5 `application.yml`: `hikari.connection-timeout: 2000`, `initialization-fail-timeout: 2000`, `connection-test-query: SELECT 1`, `management.endpoint.health.probes.enabled: true` + `group.readiness.include: db`. Kiểm chứng live (identity jar + docker postgres): PG tắt lúc start → attempt 1–4 fail có warn → bật PG sau ~8 s → "Flyway migration succeeded on attempt 4/6", Tomcat up <30 s; `/actuator/health/readiness` = UP 200 khi PG lên, **DOWN 503** khi tắt PG, UP lại khi bật; fail-fast: PG tắt >40 s → app exit sau attempt 10 với lỗi rõ. Ghi chú kỹ thuật: Boot 4 + HikariCP 7 không validate connection lúc checkout (phải có `connection-test-query` để readiness DOWN đúng) và group readiness mặc định chỉ gồm `readinessState` (phải include `db`).
 
 ---
 
@@ -178,39 +180,45 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Sửa: ghi quy tắc: Trip **phải** gửi release (tạo tombstone) cho mọi `reservationId` đã cấp mà không dùng nữa, kể cả sau khi nhận 409/timeout; không tái dùng `commandId` cho thao tác khác. Ghi rõ command lỗi không được lưu để replay.
   - ✅ Đã làm (2026-10-21): api-contracts.md §4.1 thêm chốt N24 — Trip phải gửi release (tombstone nếu tới trước) cho mọi reservationId đã cấp mà bỏ, kể cả sau 409/timeout; không tái dùng commandId cho thao tác khác; command lỗi không lưu để replay. state-machines.md §2 quy tắc worker cập nhật tương ứng.
 
-- [ ] **T05-7 — N25 (P3): Chưa có cơ chế kích hoạt retry thanh toán**
+- [x] **T05-7 — N25 (P3): Chưa có cơ chế kích hoạt retry thanh toán**
   - Vị trí: `docs/state-machines.md` §5; `docs/api-contracts.md` §3.
   - Sửa: ghi rõ MVP không có retry nghiệp vụ (FAILED là trạng thái cuối, spec §15 cho phép), hoặc định nghĩa endpoint/worker cấp attempt mới.
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): chốt **MVP không có retry payment chủ động** — `state-machines.md` §5: diagram bỏ cạnh FAILED→PENDING, đánh dấu `FAILED ⊘` terminal + ghi chú spec §15 (bỏ tính năng retry payment chủ động cho solo scope), lỗi kỹ thuật retry in-process trong cùng attempt theo spec §10; ghi chú `trips.payment_attempt` ở §1 sửa tương ứng. `api-contracts.md` decision #9: "MVP: FAILED là terminal — không có cơ chế cấp attempt mới sau FAILED".
 
-- [ ] **T05-8 — N26 (P3): Tên field event không thống nhất**
+- [x] **T05-8 — N26 (P3): Tên field event không thống nhất**
   - Vị trí: `docs/events.md` §3.4–3.6.
   - Sửa: thống nhất `paymentAttempt` hoặc `attempt` cho cả ba event; `failureCode` hoặc `reason` (spec §9 dùng `reason`).
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): `events.md` §3.4 TripCompleted đổi `"paymentAttempt": 1` → `"attempt": 1`; §3.6 PaymentFailed đổi `failureCode` → `reason` (+ bullet đổi tên); cả ba event (§3.4–3.6) giờ dùng `attempt`. Cột DB `trips.payment_attempt`/`payments.failure_code` giữ nguyên (schema, không phải field event — ghi chú trong docs). Decision #9 api-contracts: "Payment event mang `attempt`".
 
-- [ ] **T05-9 — N27 (P3): Passenger không biết thông tin tài xế**
+- [x] **T05-9 — N27 (P3): Passenger không biết thông tin tài xế**
   - Vị trí: `docs/api-contracts.md` §3.3; `docs/events.md` §3.2; §4.2 candidates.
   - Sửa: thêm `displayName`, `plateNumber`, `vehicleType` vào candidate (Driver → Matching → Trip), Trip lưu snapshot khi offer và trả trong GET detail. Hoặc ghi rõ MVP không hiển thị.
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): chốt **MVP không hiển thị** thông tin driver cho passenger (course spec §7.3 không yêu cầu; trip-service không đọc Driver DB). Ghi chú explicit thêm ở: `api-contracts.md` §3.3 GET /api/trips/{id} (passenger chỉ thấy `driverId`, không enrich profile), `events.md` §3.2 candidates (chỉ driverId/driverUserId/distanceM — không tên/số xe), `api-contracts.md` §4.2 GET /internal/drivers/candidates (response chỉ ID + khoảng cách).
 
-- [ ] **T05-10 — N28 (P3): Chưa chốt giới hạn số chuyến active của một passenger**
+- [x] **T05-10 — N28 (P3): Chưa chốt giới hạn số chuyến active của một passenger**
   - Vị trí: `docs/api-contracts.md` §3.3 POST /api/trips.
   - Sửa: chốt "mỗi passenger tối đa một chuyến chưa terminal → 409 `ACTIVE_TRIP_EXISTS`" (khuyến nghị; cài đặt ở T12-6), hoặc ghi rõ cho phép nhiều chuyến.
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): chốt **tối đa một trip chưa terminal per passenger → 409 `ACTIVE_TRIP_EXISTS`** (khuyến nghị). Thêm vào `api-contracts.md`: bullet "Chốt T12-6 (N28)" ở §3.3 POST /api/trips + dòng `409 ACTIVE_TRIP_EXISTS` trong bảng mã lỗi §1.2. Cài đặt + test ở T12-6.
 
 - [x] **T05-11 — N06 phần contract (P3): Bảng mã lỗi không có mã cho rate limit**
   - Vị trí: `docs/api-contracts.md` §1.2.
   - Sửa: thêm `429 RATE_LIMITED` (cài đặt ở T08-6).
   - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): thêm dòng `429 RATE_LIMITED` vào bảng mã lỗi contract §1.2; cài đặt nginx ở T08-6 đã kiểm chứng thật (burst → 429 JSON).
 
-- [ ] **T05-12 — N07 (P3): Một internal token dùng chung, không phân quyền theo caller**
+- [x] **T05-12 — N07 (P3): Một internal token dùng chung, không phân quyền theo caller**
   - Vị trí: `docs/api-contracts.md` §2 và quyết định #8.
   - Sửa: dùng token riêng cho từng caller (`INTERNAL_TOKEN_TRIP`, `INTERNAL_TOKEN_MATCHING`); Driver cho phép Matching chỉ gọi `GET /internal/drivers/candidates`, còn Trip gọi được reservation. Hoặc ghi rõ là rủi ro chấp nhận trong báo cáo.
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): chốt **rủi ro chấp nhận** (rẻ hơn per-caller token; giữ test ổn định). `api-contracts.md` §2: bullet "Rủi ro chấp nhận (chốt T05-12/N07)" — token dùng chung cho phép mọi caller nội bộ gọi mọi `/internal/**` của driver-service; mitigations: Docker network isolation, không expose public, so sánh constant-time, spec §11; per-caller token = cải tiến tương lai. Decision #8 cập nhật tương ứng.
 
 ---
 
 ## T06 — Identity
 
-- [ ] **T06-1 — F05 (P2): Ký tự U+0000 qua validation, PostgreSQL lỗi → 500**
+- [x] **T06-1 — F05 (P2): Ký tự U+0000 qua validation, PostgreSQL lỗi → 500**
   - Vị trí: `identity-service/.../service/UserService.java:56` (fullName); áp dụng tương tự cho Driver `DriverService.validateProfileInput` (displayName, plateNumber).
   - Sửa: từ chối ký tự điều khiển (`\p{Cc}`, đặc biệt `\u0000`) trong mọi field text → 400 `INVALID_INPUT`.
   - Kiểm chứng: test register với `"fullName":"ab\u0000c"` → 400, DB không đổi; tương tự cho driver profile.
+  - ✅ Đã làm + kiểm chứng (Phase 8): `UserService.containsControlChar()` (`Character::isISOControl`) — register từ chối control char trong fullName sau trim → 400 INVALID_INPUT; test `controlCharInFullNameRejectedWithoutPersisting` trong `AuthFlowIntegrationTest`. Phía driver: cùng check trong `DriverService.validateProfileInput` cho displayName + test `controlCharInDisplayNameRejectedWithoutPersisting` trong `DriverProfileIntegrationTest`. Cả hai pass trong full reactor run.
 
 - [x] **T06-2 — F25 (P2): `generate-dev-keys.sh` dùng CRLF**
   - Vị trí: `scripts/generate-dev-keys.sh` (toàn file).
@@ -224,10 +232,11 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Kiểm chứng: xóa public, chạy script → fingerprint private không đổi; token cũ vẫn verify được.
   - ✅ Đã làm + kiểm chứng (Phase 6): script tạo lại public từ private (`openssl pkey -pubout`) khi public thiếu, không ghi đè private trừ `--force`; `JwtService` thêm `verifyKeyPair()` lúc khởi động (ký probe RS256 bằng private, verify bằng public; lệch → IllegalStateException). Kiểm chứng: xóa `keys/jwt-public.pem`, chạy script → public tái tạo byte-identical với backup (cmp + sha256), fingerprint private không đổi. Test `JwtServiceKeyPairCheckTest` 2/2 trong `mvnw clean verify`.
 
-- [ ] **T06-4 — R03 (P3): Login bỏ qua BCrypt khi email không tồn tại**
+- [x] **T06-4 — R03 (P3): Login bỏ qua BCrypt khi email không tồn tại**
   - Vị trí: `identity-service/.../service/UserService.java:78–80`.
   - Sửa: khi không tìm thấy user, vẫn gọi `passwordEncoder.matches(password, DUMMY_HASH)` để thời gian xử lý tương đương. Ghi chú trong báo cáo rằng register vốn đã lộ EMAIL_TAKEN.
   - Kiểm chứng: đo 20 lần mỗi loại; chênh lệch trung bình không còn ~70 ms.
+  - ✅ Đã làm + kiểm chứng (Phase 8): `UserService` — `DUMMY_HASH = new BCryptPasswordEncoder().encode("dummy-password-for-timing-equalization")`; login với email không tồn tại chạy `passwordEncoder.matches(password, DUMMY_HASH)` trước khi trả lỗi. Test `loginWithMissingEmailTakesComparableTimeToWrongPassword`: đo 20 lần mỗi path, assert avgMissing ≥ 0.4 × avgExisting (ratio-based, scale-independent). Pass trong full reactor run.
 
 ---
 
@@ -298,19 +307,22 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Kiểm chứng: response 200 có header đúng giá trị đã gửi hoặc vừa sinh.
   - ✅ Đã làm + kiểm chứng (2026-10-21): `doFilterInternal` set `response.setHeader("X-Correlation-ID", id)` trước `chain.doFilter` ở cả 5 service; test assert header có mặt với giá trị canonical trên cả response 400 và 202.
 
-- [ ] **T07-11 — N03 (P3): Ứng dụng không giới hạn kích thước body**
+- [x] **T07-11 — N03 (P3): Ứng dụng không giới hạn kích thước body**
   - Vị trí: `*/application.yml`; filter.
   - Sửa: filter từ chối `Content-Length > 65536` hoặc đọc vượt 64 KiB → 413 `PAYLOAD_TOO_LARGE` (ApiError). Áp dụng cả cho `/internal/**`.
   - Kiểm chứng: gọi thẳng backend với body 70 KiB → 413 JSON.
+  - ✅ Đã làm + kiểm chứng (Phase 8): filter mới per-service ×5 — `security/BodySizeLimitFilter.java` (@Order(2), sau CorrelationIdFilter; áp dụng `/api/**` và `/internal/**`; Content-Length > 65536 → 413 JSON với correlationId ngay, không đọc body; body chunked/không CL → counting wrapper ném `PayloadTooLargeException` khi đọc vượt 64 KiB) + `exception/PayloadTooLargeException.java` ×5 + `@ExceptionHandler(PayloadTooLargeException.class)` → 413 PAYLOAD_TOO_LARGE trong mỗi GlobalExceptionHandler. Tests: identity `oversizedBodyReturns413PayloadTooLarge` (AuthFlowIntegrationTest, raw request + correlation header), driver cùng tên (DriverProfileIntegrationTest, JWT hợp lệ + displayName 70k char), trip cùng tên (SecurityProbeTest, passenger token + padding field), matching & payment cùng tên (SecuritySmokeTest, helper `post(path, byte[], correlation)`, POST path chưa có handler với body 70 KiB). Ghi chú kỹ thuật: override `setReadListener` của Jakarta Servlet không được khai báo `throws IOException`.
 
-- [ ] **T07-12 — N08 (P3): Driver khởi động với internal token rỗng; `.env` local thiếu key**
+- [x] **T07-12 — N08 (P3): Driver khởi động với internal token rỗng; `.env` local thiếu key**
   - Vị trí: `driver-service/.../application.yml` (`${INTERNAL_API_TOKEN:}`); `ApiSecurityFilter` constructor; `.env` (thiếu `INTERNAL_API_TOKEN`, `FARE_BASE_VND`, `FARE_PER_KM_VND`, `RESERVATION_EXPIRY_ENABLED`, `RESERVATION_EXPIRY_FIXED_DELAY_MS`).
   - Sửa: dừng khởi động nếu token rỗng hoặc ngắn hơn 16 ký tự; đồng bộ `.env` theo `.env.example`.
   - Kiểm chứng: chạy Driver không có token → dừng với thông báo rõ.
+  - ✅ Đã làm + kiểm chứng (Phase 8): `InternalTokenFilter` constructor ném IllegalStateException khi token null/blank/<16 chars ("INTERNAL_API_TOKEN must be set and at least 16 characters long...") — bean tạo lúc context refresh nên app từ chối khởi động với thông báo rõ. Unit test mới `src/driver-service/src/test/java/com/ridehailing/driver/security/InternalTokenFailFastTest.java` (empty/null/15-char → throw; 23-char OK). `.env` đồng bộ với `.env.example`: thêm `INTERNAL_API_TOKEN=internal_dev_2026`, `FARE_BASE_VND=12000`, `FARE_PER_KM_VND=5000`, `RESERVATION_EXPIRY_ENABLED=true`, `RESERVATION_EXPIRY_FIXED_DELAY_MS=1000`. Mọi test driver hiện có set token ≥ 16 chars (`test-internal-token-*` = 23, `restart-test-token` = 18) nên fail-fast không phá test.
 
-- [ ] **T07-13 — Q01 (P3): Test "không có secret trong log" quá hẹp**
+- [x] **T07-13 — Q01 (P3): Test "không có secret trong log" quá hẹp**
   - Vị trí: `*/JsonLogLayoutTest.java` (×5).
   - Sửa: assert trên toàn bộ chuỗi output (không chỉ top-level key) không chứa token mẫu, password mẫu hay chuỗi `Bearer `; chạy một luồng register/login thật rồi quét log đã ghi.
+  - ✅ Đã làm + kiểm chứng (Phase 8): cả 5 `JsonLogLayoutTest.java` — `layoutDoesNotCreateTopLevelSecretFields` dùng secrets mẫu "secret-token-123"/"sample-password-456" và gọi helper mới `assertNoSecretsOutsideMessage(m)` (quét mọi field parse được trừ `message`); test mới `normalEventOutputContainsNoSecrets` assert TOÀN BỘ chuỗi raw output không chứa token/password mẫu hay `Bearer `. Phần luồng thật: identity `AuthFlowIntegrationTest.registerLoginFlowLogsContainNoSecrets` — gắn OutputStreamAppender+JsonLogLayout programmatic vào root logger, chạy register+login THẬT qua HTTP, quét log bắt được: phải chứa `/api/auth/register` + `/api/auth/login`, KHÔNG chứa password ("secret123"), JWT accessToken thật hay `Bearer `. Ghi chú: layout không redact secret (contract: app code không được ghi secret) — test chứng minh output sạch.
 
 - [x] **T07-14 — Q02 (P3): Chưa test framing nhiều event và stack trace**
   - Sửa: gộp chung với T07-6 và T07-7 (test qua appender thật).
@@ -558,10 +570,11 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Kiểm chứng: test tạo chuyến đồng thời trong lúc list → `totalElements` khớp với nội dung trang.
   - ✅ Đã làm + kiểm chứng (2026-10-21): `list()` đặt `@Transactional(readOnly=true, isolation=Isolation.REPEATABLE_READ)` — count và content đọc cùng snapshot; test `listUnderRepeatableReadStaysConsistentWithConcurrentCreates`.
 
-- [ ] **T12-6 — N28 (P3): Không giới hạn số chuyến active của một passenger**
+- [x] **T12-6 — N28 (P3): Không giới hạn số chuyến active của một passenger**
   - Vị trí: `TripService.create:81–134`.
   - Sửa (sau khi chốt T05-10): trong transaction, khóa theo passenger (advisory lock) rồi kiểm tra có chuyến state chưa terminal hay không → 409 `ACTIVE_TRIP_EXISTS`; hoặc dùng partial unique index `(passenger_id) WHERE state IN ('SEARCHING','DRIVER_OFFERED','CANCELLING','ACCEPTED','IN_PROGRESS')`.
   - Kiểm chứng: hai create đồng thời với hai key khác nhau → một 202, một 409; replay cùng key vẫn 202.
+  - ✅ Đã làm + kiểm chứng (Phase 8, 2026-10-22): `TripService.create` — sau khi claim idempotency key thành công, trong transaction: `tripRepo.acquirePassengerAdvisoryLock(passengerId)` (`pg_advisory_xact_lock(hashtext(?))`, tự release khi transaction kết thúc) rồi `countNonTerminalForPassenger` (state NOT IN ('COMPLETED','CANCELLED','NO_DRIVER')) > 0 → ném `ActiveTripExistsException` mới → GlobalExceptionHandler trả **409 ACTIVE_TRIP_EXISTS** với details {passengerId}. Replay key cũ (claimed == 0) không qua nhánh này — vẫn trả 202 gốc; claim thất bại bị rollback cùng transaction nên key không bị tiêu thụ. Tests trong `TripIntegrationTest`: `secondCreateForSamePassengerReturns409ActiveTripExists` (create thứ hai → 409, chỉ 1 trip row, key thứ hai không ghi DB, replay key đầu vẫn 202) + `concurrentCreatesForSamePassengerYieldOne202AndOne409` (2 thread cùng passenger, key khác nhau → đúng một 202 và một 409). Test T12-5 `listUnderRepeatableReadStaysConsistentWithConcurrentCreates` cập nhật dùng 6 passenger khác nhau (vẫn giữ invariant RR: totalElements == content.size()). Trip module: **59/59 pass**.
 
 - [x] **T12-7 — N20 (P3): Cổng test cố định trùng nhau giữa các module**
   - Vị trí: `server.port=18099` (Driver và Trip), `18100` (Driver và Matching), `18101` (Driver và Payment), cùng `18097`, `18098`, `18102`.

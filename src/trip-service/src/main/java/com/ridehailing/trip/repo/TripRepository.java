@@ -66,6 +66,22 @@ public class TripRepository {
         return c == null ? 0 : c;
     }
 
+    /** T12-6 (N28): advisory lock transaction-scope theo passenger — serialize các create đồng thời
+     * của cùng passenger; tự release khi transaction kết thúc. */
+    public void acquirePassengerAdvisoryLock(UUID passengerId) {
+        // SELECT qua query() + ResultSetExtractor — PgJDBC mới từ chối executeUpdate() cho
+        // statement trả row ("A result was returned when none was expected").
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?))", rs -> null, passengerId.toString());
+    }
+
+    /** T12-6 (N28): số trip chưa terminal của passenger (terminal = COMPLETED, CANCELLED, NO_DRIVER). */
+    public long countNonTerminalForPassenger(UUID passengerId) {
+        Long c = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM trips WHERE passenger_id = ? AND state NOT IN ('COMPLETED','CANCELLED','NO_DRIVER')",
+                Long.class, passengerId);
+        return c == null ? 0 : c;
+    }
+
     private TripRow mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
         Object driverRaw = rs.getObject("driver_id");
         return new TripRow(

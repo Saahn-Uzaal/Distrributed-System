@@ -1,5 +1,6 @@
 package com.ridehailing.trip.service;
 
+import com.ridehailing.trip.exception.ActiveTripExistsException;
 import com.ridehailing.trip.exception.IdempotencyMismatchException;
 import com.ridehailing.trip.exception.InvalidInputException;
 import com.ridehailing.trip.exception.TripNotFoundException;
@@ -123,6 +124,18 @@ public class TripService {
             details.put("idempotencyKey", key.toString());
             throw new IdempotencyMismatchException(
                     "Idempotency-Key was already used with a different payload.", details);
+        }
+
+        // T12-6 (N28): tối đa MỘT trip chưa terminal per passenger. Advisory xact lock serialize các
+        // create đồng thời của cùng passenger; check chạy sau khi mọi create trước đó commit/rollback.
+        // Replay key cũ (claimed == 0) không đi qua nhánh này — vẫn trả 202 gốc.
+        tripRepo.acquirePassengerAdvisoryLock(user.userId());
+        if (tripRepo.countNonTerminalForPassenger(user.userId()) > 0) {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("passengerId", user.userId().toString());
+            throw new ActiveTripExistsException(
+                    "Passenger already has an active trip; cancel or complete it before creating another.",
+                    details);
         }
 
         // T12-1 (F14): MỘT timestamp duy nhất — ghi tường minh vào trips.created_at và dùng

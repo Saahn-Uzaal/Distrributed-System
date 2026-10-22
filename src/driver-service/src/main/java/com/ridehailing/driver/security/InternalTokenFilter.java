@@ -33,7 +33,14 @@ public class InternalTokenFilter extends OncePerRequestFilter {
     private final String internalToken;
     private final tools.jackson.databind.ObjectMapper objectMapper;
 
+    /** N08 (T07-12): fail-fast khi INTERNAL_API_TOKEN thiếu hoặc ngắn hơn 16 ký tự —
+     *  service không được khởi động với credential internal yếu/rỗng. */
     public InternalTokenFilter(String internalToken, tools.jackson.databind.ObjectMapper objectMapper) {
+        if (internalToken == null || internalToken.isBlank() || internalToken.length() < 16) {
+            throw new IllegalStateException(
+                    "INTERNAL_API_TOKEN must be set and at least 16 characters long. "
+                            + "Refusing to start driver-service with a missing or weak internal API token.");
+        }
         this.internalToken = internalToken;
         this.objectMapper = objectMapper;
     }

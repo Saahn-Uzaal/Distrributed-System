@@ -60,6 +60,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "INVALID_INPUT", "Malformed request body.", null, req);
     }
 
+    // N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE
+    @ExceptionHandler(PayloadTooLargeException.class)
+    public ResponseEntity<ApiError> payloadTooLarge(PayloadTooLargeException e, HttpServletRequest req) {
+        return build(HttpStatus.PAYLOAD_TOO_LARGE, "PAYLOAD_TOO_LARGE", e.getMessage(), null, req);
+    }
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiError> dataIntegrity(DataIntegrityViolationException e, HttpServletRequest req) {
         log.error("Data integrity violation (correlationId={})", CorrelationIdFilter.resolve(req), e);

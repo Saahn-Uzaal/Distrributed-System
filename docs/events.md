@@ -81,6 +81,7 @@ Payload (chốt: **danh sách có thứ tự**, không phải một driverId):
 }
 ```
 - `candidates` sắp theo rank: `distanceM` tăng, tie-break `driverId`; max `MATCHING_MAX_CANDIDATES=5`.
+- Candidate chỉ mang `driverId`/`driverUserId`/`distanceM` — **không có tên/số xe** (chốt N27): MVP không hiển thị thông tin driver cho passenger; trip-service không đọc Driver DB.
 - **Chốt sửa R02 (2026-10-20):** candidate mang cả driverId (profile) và driverUserId (JWT sub). Matching T15 giữ nguyên ánh xạ từ candidates API; Trip T16 lưu driver_id + driver_user_id cùng assignment. Không suy luận hai UUID bằng nhau, không đọc chéo DB.
 - Trip thử reserve lần lượt từ đầu danh sách; candidate conflict → thử tiếp.
 - **Hết danh sách mà chưa giữ được chỗ, hoặc nhận `NoDriverFound` đúng attempt** — nếu attempt < `MAX_MATCHING_ATTEMPTS` và chưa quá deadline: transition `SEARCHING → SEARCHING` (state-machines.md §1): attempt+1, `next_retry_at = now + MATCHING_RETRY_DELAY_MS`, phát `TripRequested` attempt mới qua outbox. **Excluded list giữ nguyên** với NoDriverFound (không có candidate nào bị loại nên không thêm vào excluded). Hết attempts hoặc quá deadline → `NO_DRIVER`.
@@ -96,9 +97,10 @@ Payload:
 ### 3.4. TripCompleted — `trip.completed` — trip-service → payment-service
 Payload:
 ```json
-{"tripId": "uuid", "paymentAttempt": 1, "amountVnd": 32000, "currency": "VND"}
+{"tripId": "uuid", "attempt": 1, "amountVnd": 32000, "currency": "VND"}
 ```
 - `currency` luôn `"VND"` (MVP). Payment chỉ xử lý đúng trip/attempt; unique `(trip_id, attempt)` chống thu trùng.
+- Field `attempt` thống nhất với §3.5/§3.6 (chốt N26); cột DB `trips.payment_attempt` là schema, không phải tên field event.
 
 ### 3.5. PaymentSucceeded — `payment.succeeded` — payment-service → trip-service
 Payload:
@@ -109,9 +111,10 @@ Payload:
 ### 3.6. PaymentFailed — `payment.failed` — payment-service → trip-service
 Payload:
 ```json
-{"tripId": "uuid", "paymentId": "uuid", "attempt": 1, "failureCode": "SIMULATED_DECLINE"}
+{"tripId": "uuid", "paymentId": "uuid", "attempt": 1, "reason": "SIMULATED_DECLINE"}
 ```
-- `failureCode`: mã kỹ thuật/giả lập (dev config quyết định tỷ lệ fail). Trip giữ state `COMPLETED`, chỉ cập nhật `payment_status=FAILED` — không rollback chuyến đã chạy.
+- `reason`: mã kỹ thuật/giả lập (dev config quyết định tỷ lệ fail) — thống nhất tên field với §3.3/§3.5 (chốt N26); cột DB `payments.failure_code` là schema, không phải tên field event.
+- Trip giữ state `COMPLETED`, chỉ cập nhật `payment_status=FAILED` — không rollback chuyến đã chạy.
 
 ## 4. Quy tắc xử lý phía consumer (chốt)
 

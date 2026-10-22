@@ -44,6 +44,7 @@ Không bao giờ trả stack trace. `details` tùy chọn (object hoặc array).
 | 403 | `FORBIDDEN` | Role không đủ cho thao tác (vd passenger gọi endpoint DRIVER) |
 | 404 | `NOT_FOUND` | Resource không tồn tại **hoặc** caller không có quyền xem — chính sách nhất quán: không lộ sự tồn tại resource của người khác |
 | 409 | `IDEMPOTENCY_MISMATCH` | Cùng `Idempotency-Key`, payload khác |
+| 409 | `ACTIVE_TRIP_EXISTS` | Passenger đã có trip chưa terminal (`state` ∉ {COMPLETED, CANCELLED, NO_DRIVER}) — tối đa một chuyến hoạt động per passenger (chốt T12-6/N28) |
 | 409 | `STATE_CONFLICT` | Chuyển trạng thái sai (details chứa state hiện tại) |
 | 409 | `NOT_OFFERED_DRIVER` | Accept/reject bởi driver không phải người được offer cho trip+attempt đó |
 | 409 | `NOT_ASSIGNED_DRIVER` | Start/complete bởi driver không phải driver đã assign |
@@ -88,6 +89,7 @@ Query: `page` (0-based, default 0), `size` (default 20, max **100** — lớn h�
 - Payload JWT phải là JSON object; mọi phần tử `aud` phải là string, không lọc bỏ phần tử sai kiểu để chấp nhận token. Payload/claims không hợp lệ trả 401.
 - Clock skew = **0 giây**: `exp` bắt buộc là số và phải **lớn hơn** giây epoch hiện tại (`exp <= now` bị từ chối); `nbf` nếu có phải đã hiệu lực.
 - Internal credential: **một token dev dùng chung** cho mọi cặp service (env `INTERNAL_API_TOKEN`, từ `.env`), header `X-Internal-Token`. Không expose qua Nginx; internal port không publish ra host.
+- **Rủi ro chấp nhận (chốt T05-12/N07):** một token dùng chung nghĩa là mọi caller nội bộ (Trip, Matching) đều có thể gọi **mọi** endpoint `/internal/**` của driver-service — không phân quyền theo caller. Mitigations: network Docker isolation (internal port không publish ra host), so sánh constant-time, yêu cầu spec §11; per-caller token là cải tiến tương lai, ngoài MVP.
 
 ---
 
@@ -184,6 +186,7 @@ Body giống quote.
 - Cùng key + cùng payload (retry client): trả lại **response gốc** đã lưu (cùng tripId, 202) — không tạo trip mới.
 - Cùng key + payload khác: 409 `IDEMPOTENCY_MISMATCH`.
 - Thiếu key / key sai định dạng UUID: 400 `INVALID_INPUT`.
+- **Chốt T12-6 (N28):** tối đa **một** trip chưa terminal per passenger — nếu passenger đã có trip với `state` ∉ {COMPLETED, CANCELLED, NO_DRIVER} thì create mới trả **409 `ACTIVE_TRIP_EXISTS`**. Kiểm tra chạy trong transaction sau advisory lock theo passenger; claim idempotency key thất bại bị rollback cùng transaction (key không bị tiêu thụ).
 
 #### GET /api/trips (authenticated, phân trang §1.3)
 Passenger thấy chuyến của mình; driver thấy chuyến đang offer/assign cho mình.
@@ -212,6 +215,7 @@ Passenger thấy chuyến của mình; driver thấy chuyến đang offer/assign
 }
 ```
 - 404 `NOT_FOUND` nếu không tồn tại hoặc caller không có quyền (chính sách §1.2)
+- **Chốt T05-9 (N27):** passenger chỉ thấy `driverId` — MVP **không hiển thị** tên/số xe/ảnh driver; trip-service không đọc Driver DB, không enrich profile.
 
 #### GET /api/trips/{id}/events (owner/assigned driver, phân trang, sắp `version` giảm)
 `content[]`:
@@ -301,6 +305,7 @@ Query: `lat`, `lng` (bắt buộc, hợp lệ), `radiusM` (default 5000; phải 
 {"candidates":[{"driverId":"profile-uuid","driverUserId":"identity-user-uuid","distanceM":412}]}
 ```
 Chỉ driver `AVAILABLE` + heartbeat còn mới (`last_seen_at` trong `HEARTBEAT_STALE_AFTER_MS=15000`). Sắp **deterministic**: `distanceM` tăng, tie-break `driverId` (lexicographic UUID).
+- Response chỉ mang ID + khoảng cách — không tên/số xe (chốt T05-9/N27); consumer không enrich profile để hiển thị cho passenger trong MVP.
 
 #### PUT /internal/reservations/{reservationId} — RESERVE
 Body:
@@ -387,8 +392,8 @@ Sau khi trip COMPLETED: chỉ từ state `CONFIRMED` (khớp tripId) → termina
 | 5 | State terminal của reservation sau finish? | `RELEASED` + cột mới `terminal_reason` ∈ {`CANCELLED`,`REJECTED`,`OFFER_EXPIRED`,`TRIP_COMPLETED`} | Giữ đúng 4 state đã chốt (RESERVED/CONFIRMED/RELEASED/EXPIRED) mà vẫn phân biệt lý do terminal |
 | 6 | Sai quyền: 403 hay 404? | GET resource không có quyền → **404**; action sai role → **403**; state conflict → **409** | Chính sách nhất quán, không lộ tồn tại resource người khác (S01) |
 | 7 | Chấp nhận commandVersion thế nào? | Chỉ khi `commandVersion > last_command_version` đã lưu | Chống xử lý ngược thứ tự; retry cùng command dùng replay hash, không cần version mới |
-| 8 | Internal auth mechanism? | Header `X-Internal-Token`, token dev dùng chung từ env, so constant-time | Đơn giản cho MVP, tách khỏi JWT user; network Docker không phải cơ chế xác thực duy nhất (spec §11) |
-| 9 | Số payment attempt lưu ở đâu? | Cột mới `trips.payment_attempt` int default 0; Trip cấp attempt mới sau FAILED khi chưa có success | Payment event mang `paymentAttempt`; unique(trip_id, attempt) chống thu trùng |
+| 8 | Internal auth mechanism? | Header `X-Internal-Token`, token dev dùng chung từ env, so constant-time | Đơn giản cho MVP, tách khỏi JWT user; **rủi ro chấp nhận**: mọi caller nội bộ gọi được mọi `/internal/**` của driver-service — mitigations: Docker network isolation, không expose public, spec §11 (per-caller token = cải tiến tương lai) |
+| 9 | Số payment attempt lưu ở đâu? | Cột `trips.payment_attempt` int default 0; tăng lên 1 khi phát TripCompleted. MVP: FAILED là terminal — **không có cơ chế cấp attempt mới sau FAILED** (spec §15); retry kỹ thuật nằm trong cùng attempt (spec §10) | Payment event mang `attempt`; unique(trip_id, attempt) chống thu trùng |
 | 10 | Notification mark-as-read? | **Không** làm endpoint trong MVP (giữ cột `read_at`) | Giữ đúng danh sách endpoint spec §8 |
 
 ---

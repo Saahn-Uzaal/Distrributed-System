@@ -11,12 +11,28 @@ spring:
     username: matching_svc
     # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
     password: ${MATCHING_DB_PASSWORD}
+    # N17 (C06): fail-fast kết nối DB (mặc định 30 s) — phối hợp với retry Flyway lúc khởi động.
+    hikari:
+      connection-timeout: 2000
+      initialization-fail-timeout: 2000
+      # N17 (C06): validate thật bằng round-trip khi checkout — readiness phản ánh đúng trạng thái DB
+      # (pool ấm không tự phát hiện kết nối chết nếu chỉ dựa vào isValid()).
+      connection-test-query: SELECT 1
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true # N17 (C06): /actuator/health/liveness + /readiness cho container orchestration.
+      group:
+        readiness:
+          # N17 (C06): Boot 4 mặc định readiness KHÔNG gồm db — thêm tường minh để
+          # /actuator/health/readiness DOWN (503) khi DB down, UP khi DB up.
+          include: db
 
 logging:
   level:

@@ -1,6 +1,7 @@
 package com.ridehailing.identity;
 
 import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.OutputStreamAppender;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -567,6 +568,107 @@ class AuthFlowIntegrationTest {
 
         Resp two = post("/api/auth/register", new RegisterBody(email, PASSWORD, "\u001FAB\u001F", "PASSENGER"));
         assertThat(two.status()).isEqualTo(201); // sau trim -> "AB" (2 ký tự)
+    }
+
+    /** F05 (T06-1): fullName chứa ký tự điều khiển \u0000 -> 400 INVALID_INPUT, DB không đổi. */
+    @Test
+    void controlCharInFullNameRejectedWithoutPersisting() throws Exception {
+        String email = "ctrlchar-" + UUID.randomUUID() + "@example.com";
+        Resp r = post("/api/auth/register", new RegisterBody(email, PASSWORD, "ab\u0000c", "PASSENGER"));
+        assertThat(r.status()).isEqualTo(400);
+        assertThat((String) r.body().get("code")).isEqualTo("INVALID_INPUT");
+
+        List<Integer> counts = jdbc.queryForList(
+                "SELECT count(*) FROM users WHERE email = ?", Integer.class, email);
+        assertThat(counts.get(0)).isEqualTo(0); // DB không đổi
+    }
+
+    /** Q01 (T07-13): chạy luồng register/login THẬT qua HTTP rồi quét log đã ghi —
+     *  không có password mẫu, JWT token thật hay chuỗi "Bearer " trong bất kỳ dòng log nào. */
+    @Test
+    void registerLoginFlowLogsContainNoSecrets() throws Exception {
+        LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger root = lc.getLogger(Logger.ROOT_LOGGER_NAME);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        OutputStreamAppender<ILoggingEvent> appender = new OutputStreamAppender<>();
+        appender.setContext(lc);
+        appender.setName("SECRET_SCAN");
+        appender.setOutputStream(out);
+        JsonLogLayout layout = new JsonLogLayout();
+        layout.setService("identity-service");
+        appender.setLayout(layout);
+        appender.start();
+        root.addAppender(appender);
+        try {
+            String email = "logscan-" + UUID.randomUUID() + "@example.com";
+            Resp reg = post("/api/auth/register", new RegisterBody(email, PASSWORD, "Log Scan User", "PASSENGER"));
+            assertThat(reg.status()).isEqualTo(201);
+            Resp login = post("/api/auth/login", new LoginBody(email, PASSWORD));
+            assertThat(login.status()).isEqualTo(200);
+            String token = (String) login.body().get("accessToken");
+            assertThat(token).isNotBlank();
+
+            String logs = out.toString(StandardCharsets.UTF_8);
+            // Luồng thật đã được ghi log (dòng http_request của register + login).
+            assertThat(logs).contains("/api/auth/register").contains("/api/auth/login");
+            // Không secret trong bất kỳ dòng log: password mẫu, JWT token thật, "Bearer ".
+            assertThat(logs).doesNotContain(PASSWORD);
+            assertThat(logs).doesNotContain(token);
+            assertThat(logs).doesNotContain("Bearer ");
+        } finally {
+            root.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    /** N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE JSON, correlationId echo. */
+    @Test
+    void oversizedBodyReturns413PayloadTooLarge() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("email", "oversize-" + UUID.randomUUID() + "@example.com");
+        body.put("password", PASSWORD);
+        body.put("fullName", "a".repeat(70_000)); // > 64 KiB
+        body.put("role", "PASSENGER");
+        byte[] bytes = JSON.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
+        HttpRequest req = HttpRequest.newBuilder(URI.create(base() + "/api/auth/register"))
+                .header("Content-Type", "application/json")
+                .header("X-Correlation-ID", correlation)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bytes))
+                .build();
+        HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+        Resp r = new Resp(resp.statusCode(), parse(resp.body()));
+        assertThat(r.status()).isEqualTo(413);
+        assertThat((String) r.body().get("code")).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat((String) r.body().get("correlationId")).isEqualTo(correlation);
+    }
+
+    /** R03 (T06-4): login với email KHÔNG tồn tại vẫn chạy BCrypt (dummy hash) —
+     *  thời gian xử lý tương đương login sai password của user tồn tại. */
+    @Test
+    void loginWithMissingEmailTakesComparableTimeToWrongPassword() throws Exception {
+        String existingEmail = "timing-" + UUID.randomUUID() + "@example.com";
+        registerUser(existingEmail);
+        String missingEmail = "missing-" + UUID.randomUUID() + "@example.com";
+
+        int n = 20;
+        long totalExisting = 0;
+        for (int i = 0; i < n; i++) {
+            long t0 = System.nanoTime();
+            post("/api/auth/login", new LoginBody(existingEmail, "wrong-password-1"));
+            totalExisting += System.nanoTime() - t0;
+        }
+        long totalMissing = 0;
+        for (int i = 0; i < n; i++) {
+            long t0 = System.nanoTime();
+            post("/api/auth/login", new LoginBody(missingEmail, "wrong-password-1"));
+            totalMissing += System.nanoTime() - t0;
+        }
+
+        double avgExistingMs = totalExisting / 1e6 / n;
+        double avgMissingMs = totalMissing / 1e6 / n;
+        // Trước R03: missing bỏ qua BCrypt -> nhanh hơn ~70 ms. Sau fix: cùng chạy BCrypt.
+        assertThat(avgMissingMs).isGreaterThanOrEqualTo(0.4 * avgExistingMs);
     }
 
     /** F17 — email > 254 ký tự bị @Size(max=254) chặn. */

@@ -56,6 +56,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "INVALID_INPUT", "Malformed request body.", null, req);
     }
 
+    // N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE
+    @ExceptionHandler(PayloadTooLargeException.class)
+    public ResponseEntity<ApiError> payloadTooLarge(PayloadTooLargeException e, HttpServletRequest req) {
+        return build(HttpStatus.PAYLOAD_TOO_LARGE, "PAYLOAD_TOO_LARGE", e.getMessage(), null, req);
+    }
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiError> dataIntegrity(DataIntegrityViolationException e, HttpServletRequest req) {
         log.error("Data integrity violation (correlationId={})", CorrelationIdFilter.resolve(req), e);
@@ -96,6 +102,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IdempotencyMismatchException.class)
     public ResponseEntity<ApiError> idempotencyMismatch(IdempotencyMismatchException e, HttpServletRequest req) {
         return build(HttpStatus.CONFLICT, "IDEMPOTENCY_MISMATCH", e.getMessage(), e.details(), req);
+    }
+
+    // T12-6 (N28): passenger đã có trip chưa terminal -> 409 ACTIVE_TRIP_EXISTS
+    @ExceptionHandler(ActiveTripExistsException.class)
+    public ResponseEntity<ApiError> activeTripExists(ActiveTripExistsException e, HttpServletRequest req) {
+        return build(HttpStatus.CONFLICT, "ACTIVE_TRIP_EXISTS", e.getMessage(), e.details(), req);
     }
 
     @ExceptionHandler(TripNotFoundException.class)

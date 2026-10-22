@@ -127,6 +127,10 @@ class DriverProfileIntegrationTest {
     }
 
     private Resp send(String method, String path, String bearerToken, String internalToken, String jsonBody) throws Exception {
+        return send(method, path, bearerToken, internalToken, null, jsonBody);
+    }
+
+    private Resp send(String method, String path, String bearerToken, String internalToken, String correlationHeader, String jsonBody) throws Exception {
         HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path));
         switch (method) {
             case "GET" -> req.GET();
@@ -139,6 +143,9 @@ class DriverProfileIntegrationTest {
         }
         if (internalToken != null) {
             req.header("X-Internal-Token", internalToken);
+        }
+        if (correlationHeader != null) {
+            req.header("X-Correlation-ID", correlationHeader);
         }
         req.header("Content-Type", "application/json");
         HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
@@ -237,6 +244,32 @@ class DriverProfileIntegrationTest {
                 "{\"displayName\":\"Driver A\",\"vehicle\":{\"plateNumber\":\"51A-123.45\",\"vehicleType\":\"TRUCK\"}}").status()).isEqualTo(400);
         assertThat(send("POST", "/api/drivers/me/profile", token, null,
                 "{\"displayName\":\"Driver A\"}").status()).isEqualTo(400);
+    }
+
+    /** N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE JSON, correlationId echo. */
+    @org.junit.jupiter.api.Test
+    void oversizedBodyReturns413PayloadTooLarge() throws Exception {
+        UUID user = UUID.randomUUID();
+        String token = signToken(user, "DRIVER", user + "@t9.test");
+        String correlation = UUID.randomUUID().toString();
+        Resp resp = send("POST", "/api/drivers/me/profile", token, null, correlation,
+                "{\"displayName\":\"" + "a".repeat(70_000) + "\",\"vehicle\":{\"plateNumber\":\"51A-123.45\",\"vehicleType\":\"CAR\"}}");
+        assertThat(resp.status()).isEqualTo(413);
+        assertThat(resp.body().get("code")).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+    }
+
+    /** F05 (T06-1): displayName chứa ký tự điều khiển \u0000 → 400 INVALID_INPUT, không ghi row. */
+    @org.junit.jupiter.api.Test
+    void controlCharInDisplayNameRejectedWithoutPersisting() throws Exception {
+        UUID user = UUID.randomUUID();
+        String token = signToken(user, "DRIVER", user + "@t9.test");
+        Resp resp = send("POST", "/api/drivers/me/profile", token, null,
+                "{\"displayName\":\"ab\\u0000c\",\"vehicle\":{\"plateNumber\":\"51A-123.45\",\"vehicleType\":\"CAR\"}}");
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM drivers WHERE user_id = ?", Integer.class, user);
+        assertThat(count).isZero();
     }
 
     @org.junit.jupiter.api.Test

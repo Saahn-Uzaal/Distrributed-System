@@ -32,7 +32,11 @@ import static org.assertj.core.api.Assertions.assertThat;
                         "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
                 // N09: datasource bị exclude — dummy password để RequiredDbPasswordValidator không chặn.
                 "spring.datasource.password=smoke_no_db",
-                "app.flyway.enabled=false"
+                "app.flyway.enabled=false",
+                // C06: production yml khai báo group.readiness.include=db, nhưng test này
+                // không có DataSource → không có contributor 'db' → Boot 4 validator fail.
+                // Override group thành rỗng để context load được; /actuator/health tổng thể vẫn hoạt động.
+                "management.endpoint.health.group.readiness.include="
         })
 class SecuritySmokeTest {
 
@@ -77,6 +81,28 @@ class SecuritySmokeTest {
         Resp resp = get("/api/does-not-exist", correlation);
         assertThat(resp.status()).isEqualTo(404);
         assertThat(resp.body().get("code")).isEqualTo("NOT_FOUND");
+        assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+    }
+
+    private Resp post(String path, byte[] bodyBytes, String correlationHeader) throws Exception {
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bodyBytes));
+        if (correlationHeader != null) {
+            req.header("X-Correlation-ID", correlationHeader);
+        }
+        HttpResponse<String> resp = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+        return new Resp(resp.statusCode(), parse(resp.body()));
+    }
+
+    /** N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE JSON, correlationId echo. */
+    @Test
+    void oversizedBodyReturns413PayloadTooLarge() throws Exception {
+        String correlation = UUID.randomUUID().toString();
+        byte[] bytes = ("{\"padding\":\"" + "a".repeat(70_000) + "\"}").getBytes(StandardCharsets.UTF_8);
+        Resp resp = post("/api/does-not-exist", bytes, correlation);
+        assertThat(resp.status()).isEqualTo(413);
+        assertThat(resp.body().get("code")).isEqualTo("PAYLOAD_TOO_LARGE");
         assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
     }
 

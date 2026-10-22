@@ -14,6 +14,7 @@ import com.ridehailing.identity.web.dto.UserResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -33,6 +34,10 @@ public class UserService {
 
     /** Giới hạn BCrypt: tối đa 72 byte UTF-8 cho password. */
     public static final int MAX_PASSWORD_BYTES = 72;
+
+    /** R03 (T06-4): dummy hash để login vẫn chạy BCrypt khi email không tồn tại — thời gian xử lý tương đương,
+     *  không lộ việc email có trong DB qua timing. */
+    private static final String DUMMY_HASH = new BCryptPasswordEncoder().encode("dummy-password-for-timing-equalization");
 
     /** N11 — audit log: eventType riêng cho register/login; không ghi email đầy đủ hay password. */
     private static final Logger log = LoggerFactory.getLogger(UserService.class);
@@ -64,6 +69,10 @@ public class UserService {
             // F04: validate sau trim — " a" không được thành tài khoản tên một ký tự
             throw new InvalidInputException("fullName must be 2-100 characters after trimming.", "fullName");
         }
+        // F05 (T06-1): từ chối ký tự điều khiển (\p{Cc}, đặc biệt \u0000) — PostgreSQL sẽ lỗi → 500.
+        if (containsControlChar(fullName)) {
+            throw new InvalidInputException("fullName must not contain control characters.", "fullName");
+        }
         User user = new User(
                 UUID.randomUUID(),
                 email,
@@ -86,6 +95,10 @@ public class UserService {
             throw new InvalidCredentialsException();
         }
         User user = users.findByEmail(normalizeEmail(req.email())).orElse(null);
+        // R03 (T06-4): email không tồn tại vẫn chạy BCrypt với dummy hash — thời gian xử lý tương đương.
+        if (user == null) {
+            passwordEncoder.matches(req.password(), DUMMY_HASH);
+        }
         if (user == null || !passwordEncoder.matches(req.password(), user.getPasswordHash())) {
             // N11 audit: login_failed — message không chứa email đầy đủ hay password.
             MDC.put("eventType", "login_failed");
@@ -105,6 +118,11 @@ public class UserService {
         return users.findById(userId)
                 .map(UserService::toResponse)
                 .orElseThrow(() -> new UnauthorizedException("Token does not match a known user."));
+    }
+
+    /** F05: kiểm tra ký tự điều khiển Unicode (category Cc — U+0000–U+001F, U+007F–U+009F, ...). */
+    static boolean containsControlChar(String s) {
+        return s.codePoints().anyMatch(Character::isISOControl);
     }
 
     static String normalizeEmail(String email) {

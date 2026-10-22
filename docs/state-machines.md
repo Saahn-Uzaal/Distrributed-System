@@ -46,7 +46,7 @@ Chốt bổ sung:
 - **Phase khi matching lại sau reject/expire** (F06): đang chờ proposal mới → Saga ở `WAITING_MATCH` (khớp việc phát `TripRequested` attempt mới); chỉ chuyển `RESERVING_DRIVER` khi có candidate đúng attempt. Không dùng lại candidate cũ cho attempt mới — danh sách candidate thuộc về attempt của nó; nếu thiết kế thay đổi, phải ghi rõ nhánh này tại đây.
 - **CANCELLING** là state transient mới (spec §6 liệt kê lifecycle không có nó — đây là quyết định thiết kế T05, mục đích UI "đang hủy" + reconcile trước khi terminal). Không ảnh hưởng invariant 5.
 - Cancel sau khi accept thắng → 409 (MVP không hỗ trợ hủy chuyến đã ACCEPTED trở đi).
-- `trips.payment_attempt` (int, default 0): tăng lên 1 khi phát TripCompleted lần đầu; attempt mới chỉ cấp sau FAILED và **chưa có** payment SUCCEEDED cho trip đó.
+- `trips.payment_attempt` (int, default 0): tăng lên 1 khi phát TripCompleted lần đầu. MVP không có cơ chế cấp attempt mới sau FAILED — `FAILED` là terminal (xem §5); cột này giữ làm schema dự phòng.
 
 ## 2. Saga orchestrator (trip-service — orchestrator duy nhất)
 
@@ -118,11 +118,11 @@ States: `NOT_REQUESTED`, `PENDING`, `SUCCEEDED` ⊘, `FAILED`.
 
 ```
 NOT_REQUESTED ──consume TripCompleted (attempt n)──► PENDING ──┬──► SUCCEEDED ⊘
-                                                                └──► FAILED
-FAILED ──Trip cấp attempt mới (chỉ khi chưa có SUCCEEDED cho trip)──► PENDING (attempt n+1)
+                                                                └──► FAILED ⊘
 ```
 
-- Unique `(trip_id, attempt)` trong `payments`; không sửa lịch sử attempt cũ — retry là record mới.
+- **MVP: `FAILED` là terminal — không có cơ chế retry payment chủ động** (spec §15 bỏ tính năng retry payment chủ động cho solo scope). Lỗi kỹ thuật trong cùng attempt được retry in-process bởi payment-service theo spec §10; việc Trip cấp attempt mới sau FAILED nằm ngoài MVP.
+- Cột `trips.payment_attempt` và unique `(trip_id, attempt)` trong `payments` giữ làm schema dự phòng: nếu mở rộng retry chủ động sau này, mỗi attempt là record mới, không sửa lịch sử attempt cũ.
 - Không có hai payment attempts hoạt động đồng thời cho một trip.
 - Trip state độc lập: COMPLETED giữ nguyên dù payment FAILED (invariant 7).
 

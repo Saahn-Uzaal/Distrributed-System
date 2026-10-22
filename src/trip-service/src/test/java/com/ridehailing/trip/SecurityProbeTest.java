@@ -155,6 +155,19 @@ class SecurityProbeTest {
         assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
     }
 
+    /** N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE JSON, correlationId echo. */
+    @Test
+    void oversizedBodyReturns413PayloadTooLarge() throws Exception {
+        String token = sign(baseClaims("PASSENGER"));
+        String correlation = UUID.randomUUID().toString();
+        Map<String, Object> body = new LinkedHashMap<>(QUOTE_BODY);
+        body.put("padding", "a".repeat(70_000)); // > 64 KiB
+        Resp resp = post("/api/trips/quote", body, token, correlation);
+        assertThat(resp.status()).isEqualTo(413);
+        assertThat(resp.body().get("code")).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+    }
+
     @Test
     void expiredTokenReturns401() throws Exception {
         long nowEpoch = Instant.now().getEpochSecond();

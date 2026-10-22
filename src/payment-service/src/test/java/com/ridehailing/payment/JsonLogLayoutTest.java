@@ -68,6 +68,8 @@ class JsonLogLayoutTest {
         }
     }
 
+    /** Q01 (T07-13): secret chỉ được phép nằm trong message — toàn bộ các field khác của output
+     *  (quét trên JSON đã parse) không chứa token mẫu, password mẫu hay chuỗi "Bearer ". */
     @Test
     void layoutDoesNotCreateTopLevelSecretFields() throws Exception {
         JsonLogLayout layout = new JsonLogLayout();
@@ -75,10 +77,47 @@ class JsonLogLayoutTest {
         Logger logger = (Logger) LoggerFactory.getLogger("com.example.Logger");
         LoggingEvent event = new LoggingEvent(
                 logger.getName(), logger, Level.INFO,
-                "Authorization: Bearer secret-token-123 password=abc", null, new Object[0]);
+                "Authorization: Bearer secret-token-123 password=sample-password-456", null, new Object[0]);
         Map<String, Object> m = parse(layout.doLayout(event));
         // Secret chỉ có thể nằm trong message (nếu app code ghi log) — không bao giờ thành field riêng.
         assertThat(m).doesNotContainKeys("token", "password", "authorization");
+        assertNoSecretsOutsideMessage(m);
+    }
+
+    /** Q01 (T07-13): toàn bộ chuỗi output của event bình thường (không secret trong message)
+     *  không chứa token mẫu, password mẫu hay chuỗi "Bearer ". */
+    @Test
+    void normalEventOutputContainsNoSecrets() throws Exception {
+        JsonLogLayout layout = new JsonLogLayout();
+        layout.setService("payment-service");
+        Logger logger = (Logger) LoggerFactory.getLogger("com.example.SecretScanProbe");
+        MDC.put("correlationId", UUID.randomUUID().toString());
+        MDC.put("eventType", "http_request");
+        MDC.put("result", "200");
+        try {
+            LoggingEvent event = new LoggingEvent(
+                    logger.getName(), logger, Level.INFO,
+                    "request method=POST path=/internal/payments/charge status=200", null, new Object[0]);
+            String line = layout.doLayout(event);
+            assertThat(line).doesNotContain("secret-token-123");
+            assertThat(line).doesNotContain("sample-password-456");
+            assertThat(line).doesNotContain("Bearer ");
+        } finally {
+            MDC.clear();
+        }
+    }
+
+    private static void assertNoSecretsOutsideMessage(Map<String, Object> m) {
+        List<String> secrets = List.of("secret-token-123", "sample-password-456", "Bearer ");
+        for (Map.Entry<String, Object> e : m.entrySet()) {
+            if ("message".equals(e.getKey())) {
+                continue; // secret chỉ được phép xuất hiện trong message.
+            }
+            String value = String.valueOf(e.getValue());
+            for (String secret : secrets) {
+                assertThat(value).as("field %s must not contain %s", e.getKey(), secret).doesNotContain(secret);
+            }
+        }
     }
 
     @Test

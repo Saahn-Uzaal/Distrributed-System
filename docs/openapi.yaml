@@ -1,0 +1,613 @@
+openapi: 3.0.3
+info:
+  title: DS03 Ride-Hailing — API (endpoint đã triển khai đến T12)
+  version: 0.1.0
+  description: >
+    OpenAPI cho các endpoint đã có code thật tại T12: identity-service (T06),
+    driver-service public + internal (T09/T11), trip-service (T12).
+    Endpoint chưa triển khai (cancel/accept/reject/start/complete, notifications,
+    GET /api/drivers/offer) sẽ được bổ sung khi task tương ứng hoàn thành.
+    Nguồn sự thật cho hành vi: docs/api-contracts.md, docs/state-machines.md, docs/events.md.
+
+servers:
+  - url: http://localhost:8080
+    description: Nginx gateway — public API (proxy tới services)
+
+tags:
+  - name: identity
+    description: identity-service (T06)
+  - name: driver-public
+    description: driver-service — endpoint public của chính driver (T09)
+  - name: driver-internal
+    description: driver-service — internal API cho Trip/Matching (T09/T11), chỉ Docker network
+  - name: trip
+    description: trip-service (T12)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------- identity-service (T06) ----------------
+  /api/auth/register:
+    post:
+      tags: [identity]
+      operationId: register
+      summary: Đăng ký user mới (public)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User đã tạo
+          headers:
+            Location: {schema: {type: string}, example: /api/auth/me}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "409":
+          description: Email đã tồn tại — code EMAIL_TAKEN
+
+  /api/auth/login:
+    post:
+      tags: [identity]
+      operationId: login
+      summary: Đăng nhập, trả JWT RS256 (public)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Token + profile user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Sai email/password — code INVALID_CREDENTIALS
+
+  /api/auth/me:
+    get:
+      tags: [identity]
+      operationId: me
+      summary: Profile user hiện tại (JWT)
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
+  # ---------------- driver-service — public (T09) ----------------
+  /api/drivers/me/profile:
+    post:
+      tags: [driver-public]
+      operationId: createProfile
+      summary: Tạo/cập nhật profile + vehicle của driver (role DRIVER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileRequest"
+      responses:
+        "201": {description: Profile mới tạo}
+        "200": {description: Profile đã cập nhật (idempotent)}
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /api/drivers/me/availability:
+    put:
+      tags: [driver-public]
+      operationId: setAvailability
+      summary: Đặt trạng thái AVAILABLE/OFFLINE (role DRIVER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityRequest"
+      responses:
+        "200":
+          description: Trạng thái mới
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityResult"
+        "409":
+          description: Không thể OFFLINE khi còn reservation hiệu lực — code STATE_CONFLICT
+
+  /api/drivers/me/location:
+    put:
+      tags: [driver-public]
+      operationId: updateLocation
+      summary: Cập nhật vị trí + heartbeat (role DRIVER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LocationRequest"
+      responses:
+        "200":
+          description: Vị trí đã lưu
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocationResult"
+        "400": {$ref: "#/components/responses/InvalidInput"}
+
+  # ---------------- driver-service — internal (T09/T11) ----------------
+  /internal/drivers/candidates:
+    get:
+      tags: [driver-internal]
+      operationId: candidates
+      summary: Driver AVAILABLE + heartbeat mới trong bán kính, sắp deterministic
+      security:
+        - internalToken: []
+      parameters:
+        - {name: lat, in: query, required: true, schema: {type: number}}
+        - {name: lng, in: query, required: true, schema: {type: number}}
+        - name: radiusM
+          in: query
+          schema: {type: integer, default: 5000}
+        - name: limit
+          in: query
+          schema: {type: integer, default: 5}
+      responses:
+        "200":
+          description: Danh sách candidate (chỉ ID + khoảng cách — không tên/số xe)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  candidates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Candidate"
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "401":
+          description: Thiếu/sai X-Internal-Token — code INVALID_INTERNAL_CREDENTIAL
+
+  /internal/reservations/{reservationId}:
+    put:
+      tags: [driver-internal]
+      operationId: reserve
+      summary: RESERVE nguyên tử (CAS driver AVAILABLE→RESERVED)
+      security:
+        - internalToken: []
+      parameters:
+        - {name: reservationId, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReserveRequest"
+      responses:
+        "201":
+          description: Reservation mới (state RESERVED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationCommandResponse"
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "409":
+          description: Conflict — code DRIVER_NOT_AVAILABLE / TOMBSTONED_RESERVATION / STALE_VERSION / IDEMPOTENCY_MISMATCH
+
+    get:
+      tags: [driver-internal]
+      operationId: getReservation
+      summary: Trạng thái reservation (reconcile sau timeout HTTP)
+      security:
+        - internalToken: []
+      parameters:
+        - {name: reservationId, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: View reservation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationView"
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /internal/reservations/{reservationId}/confirm:
+    post:
+      tags: [driver-internal]
+      operationId: confirm
+      summary: CONFIRM assignment (RESERVED→CONFIRMED, driver BUSY)
+      security:
+        - internalToken: []
+      parameters:
+        - {name: reservationId, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmRequest"
+      responses:
+        "200":
+          description: state CONFIRMED (hoặc replay response gốc)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationCommandResponse"
+        "409": {description: Conflict — code STATE_CONFLICT / STALE_VERSION}
+
+  /internal/reservations/{reservationId}/release:
+    post:
+      tags: [driver-internal]
+      operationId: release
+      summary: RELEASE reservation (tombstone nếu tới trước reserve)
+      security:
+        - internalToken: []
+      parameters:
+        - {name: reservationId, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReleaseRequest"
+      responses:
+        "200":
+          description: state RELEASED (hoặc replay response gốc)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationCommandResponse"
+        "409": {description: Conflict — code STATE_CONFLICT / STALE_VERSION}
+
+  /internal/reservations/{reservationId}/finish:
+    post:
+      tags: [driver-internal]
+      operationId: finish
+      summary: FINISH sau trip COMPLETED (CONFIRMED→RELEASED, driver AVAILABLE)
+      security:
+        - internalToken: []
+      parameters:
+        - {name: reservationId, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FinishRequest"
+      responses:
+        "200":
+          description: state RELEASED (hoặc replay response gốc)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationCommandResponse"
+        "409": {description: Conflict — code STATE_CONFLICT / STALE_VERSION}
+
+  # ---------------- trip-service (T12) ----------------
+  /api/trips/quote:
+    post:
+      tags: [trip]
+      operationId: quote
+      summary: Báo giá — không tạo trip, không side effect (role PASSENGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteRequest"
+      responses:
+        "200":
+          description: Giá tính phía server
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  distanceM: {type: integer}
+                  fareVnd: {type: integer, format: int64}
+        "400": {$ref: "#/components/responses/InvalidInput"}
+
+  /api/trips:
+    post:
+      tags: [trip]
+      operationId: createTrip
+      summary: Tạo trip SEARCHING + ý định matching (outbox) — idempotent theo header
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteRequest"
+      responses:
+        "202":
+          description: Trip đã tạo (replay key cũ trả response gốc)
+          headers:
+            Location: {schema: {type: string}, example: /api/trips/{tripId}}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripCreated"
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "409":
+          description: code IDEMPOTENCY_MISMATCH (key cũ, payload khác) hoặc ACTIVE_TRIP_EXISTS (passenger đã có trip chưa terminal — chốt T12-6/N28)
+
+    get:
+      tags: [trip]
+      operationId: listTrips
+      summary: Danh sách trip của caller (phân trang; REPEATABLE READ)
+      parameters:
+        - {name: page, in: query, schema: {type: integer, default: 0}}
+        - {name: size, in: query, schema: {type: integer, default: 20}}
+      responses:
+        "200":
+          description: Envelope phân trang §1.3
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripListEnvelope"
+
+  /api/trips/{id}:
+    get:
+      tags: [trip]
+      operationId: getTrip
+      summary: Chi tiết trip — owner (passenger) hoặc assigned driver; không quyền → 404
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: Chi tiết trip (passenger chỉ thấy driverId — MVP không hiển thị info driver)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "404": {$ref: "#/components/responses/NotFound"}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: RS256, iss=ridehailing-identity, aud chứa service đích (contract §2)
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: Token dev dùng chung từ env INTERNAL_API_TOKEN (chốt T05-12/N07 — rủi ro chấp nhận)
+
+  responses:
+    InvalidInput:
+      description: Body/param sai — code INVALID_INPUT
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ApiError"}
+    Unauthorized:
+      description: Thiếu/sai JWT — code UNAUTHORIZED
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ApiError"}
+    Forbidden:
+      description: Role không đủ — code FORBIDDEN
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ApiError"}
+    NotFound:
+      description: Không tồn tại hoặc không có quyền (chính sách §1.2) — code NOT_FOUND
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ApiError"}
+
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message, correlationId]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        correlationId: {type: string, format: uuid}
+        details: {nullable: true}
+
+    GeoPoint:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude: {type: number}
+        longitude: {type: number}
+
+    RegisterRequest:
+      type: object
+      required: [email, password, fullName, role]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string, minLength: 8, maxLength: 100}
+        fullName: {type: string}
+        role: {type: string, enum: [PASSENGER, DRIVER]}
+
+    RegisterResponse:
+      type: object
+      properties:
+        user: {$ref: "#/components/schemas/UserResponse"}
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: {type: string, format: email}
+        password: {type: string}
+
+    UserResponse:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        email: {type: string}
+        fullName: {type: string}
+        role: {type: string, enum: [PASSENGER, DRIVER]}
+
+    LoginResponse:
+      type: object
+      properties:
+        accessToken: {type: string}
+        expiresIn: {type: integer, format: int64}
+        user: {$ref: "#/components/schemas/UserResponse"}
+
+    ProfileRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName: {type: string}
+        vehicle:
+          type: object
+          properties:
+            plateNumber: {type: string}
+            vehicleType: {type: string}
+
+    AvailabilityRequest:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [AVAILABLE, OFFLINE]}
+
+    LocationRequest:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude: {type: number}
+        longitude: {type: number}
+
+    AvailabilityResult:
+      type: object
+      properties:
+        driverId: {type: string, format: uuid}
+        status: {type: string}
+        lastSeenAt: {type: string, format: date-time}
+
+    LocationResult:
+      type: object
+      properties:
+        driverId: {type: string, format: uuid}
+        lastSeenAt: {type: string, format: date-time}
+
+    Candidate:
+      type: object
+      properties:
+        driverId: {type: string, format: uuid}
+        driverUserId: {type: string, format: uuid}
+        distanceM: {type: integer}
+
+    ReserveRequest:
+      type: object
+      required: [commandId, commandVersion, tripId, driverId, attempt, expiresAt, pickup, destination, distanceM, fareVnd]
+      properties:
+        commandId: {type: string, format: uuid}
+        commandVersion: {type: integer, minimum: 1}
+        tripId: {type: string, format: uuid}
+        driverId: {type: string, format: uuid}
+        attempt: {type: integer, minimum: 1}
+        expiresAt: {type: string, format: date-time}
+        pickup: {$ref: "#/components/schemas/GeoPoint"}
+        destination: {$ref: "#/components/schemas/GeoPoint"}
+        distanceM: {type: integer}
+        fareVnd: {type: integer, format: int64}
+
+    ConfirmRequest:
+      type: object
+      required: [commandId, commandVersion, tripId, driverId, attempt]
+      properties:
+        commandId: {type: string, format: uuid}
+        commandVersion: {type: integer, minimum: 1}
+        tripId: {type: string, format: uuid}
+        driverId: {type: string, format: uuid}
+        attempt: {type: integer, minimum: 1}
+
+    ReleaseRequest:
+      type: object
+      required: [commandId, commandVersion, reason]
+      properties:
+        commandId: {type: string, format: uuid}
+        commandVersion: {type: integer, minimum: 1}
+        reason: {type: string, enum: [CANCELLED, REJECTED, OFFER_EXPIRED]}
+
+    FinishRequest:
+      type: object
+      required: [commandId, commandVersion, tripId]
+      properties:
+        commandId: {type: string, format: uuid}
+        commandVersion: {type: integer, minimum: 1}
+        tripId: {type: string, format: uuid}
+
+    ReservationCommandResponse:
+      type: object
+      properties:
+        reservationId: {type: string, format: uuid}
+        state: {type: string, enum: [RESERVED, CONFIRMED, RELEASED, EXPIRED]}
+
+    ReservationView:
+      type: object
+      properties:
+        reservationId: {type: string, format: uuid}
+        state: {type: string, enum: [RESERVED, CONFIRMED, RELEASED, EXPIRED]}
+        tripId: {type: string, format: uuid, nullable: true}
+        driverId: {type: string, format: uuid, nullable: true}
+        attempt: {type: integer, nullable: true}
+        expiresAt: {type: string, format: date-time, nullable: true}
+        version: {type: integer}
+
+    QuoteRequest:
+      type: object
+      required: [pickup, destination]
+      properties:
+        pickup: {$ref: "#/components/schemas/GeoPoint"}
+        destination: {$ref: "#/components/schemas/GeoPoint"}
+
+    TripCreated:
+      type: object
+      properties:
+        tripId: {type: string, format: uuid}
+        state: {type: string, enum: [SEARCHING]}
+        matchingAttempt: {type: integer}
+        createdAt: {type: string, format: date-time}
+
+    TripDetail:
+      type: object
+      properties:
+        tripId: {type: string, format: uuid}
+        state: {type: string}
+        pickup: {$ref: "#/components/schemas/GeoPoint"}
+        destination: {$ref: "#/components/schemas/GeoPoint"}
+        distanceM: {type: integer}
+        fareVnd: {type: integer, format: int64}
+        paymentStatus: {type: string, enum: [NOT_REQUESTED, PENDING, SUCCEEDED, FAILED]}
+        driverId: {type: string, format: uuid, nullable: true}
+        matchingAttempt: {type: integer}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+
+    TripListEnvelope:
+      type: object
+      properties:
+        content:
+          type: array
+          items: {$ref: "#/components/schemas/TripDetail"}
+        page: {type: integer}
+        size: {type: integer}
+        totalElements: {type: integer, format: int64}
+        totalPages: {type: integer}

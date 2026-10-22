@@ -38,6 +38,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", "Resource not found.", null, req);
     }
 
+    // N03 (T07-11): body > 64 KiB -> 413 PAYLOAD_TOO_LARGE
+    @ExceptionHandler(PayloadTooLargeException.class)
+    public ResponseEntity<ApiError> payloadTooLarge(PayloadTooLargeException e, HttpServletRequest req) {
+        return build(HttpStatus.PAYLOAD_TOO_LARGE, "PAYLOAD_TOO_LARGE", e.getMessage(), null, req);
+    }
+
     // F04 — lỗi phía client trả đúng status theo contract §1.2, không gom thành 500
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<ApiError> methodNotAllowed(HttpRequestMethodNotSupportedException e, HttpServletRequest req) {

@@ -11,10 +11,22 @@ spring:
     username: identity_svc
     # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
     password: ${IDENTITY_DB_PASSWORD}
+    # N17 (C06): fail-fast kết nối DB (mặc định 30 s) — phối hợp với retry Flyway lúc khởi động.
+    hikari:
+      connection-timeout: 2000
+      initialization-fail-timeout: 2000
+      # N17 (C06): validate thật bằng round-trip khi checkout — readiness phản ánh đúng trạng thái DB
+      # (pool ấm không tự phát hiện kết nối chết nếu chỉ dựa vào isValid()).
+      connection-test-query: SELECT 1
   jpa:
     hibernate:
       # Flyway sở hữu schema (spec §7) — không ddl-auto=update trong bản nộp
       ddl-auto: none
+    properties:
+      # N17 (C06): dialect tường minh để Hibernate bootstrap KHÔNG cần kết nối JDBC sống;
+      # khi PG chưa sẵn sàng, entityManagerFactory vẫn tạo được và FlywayMigrationRunner
+      # retry migrate() cho đến khi DB lên (thay vì context refresh fail ngay).
+      hibernate.dialect: org.hibernate.dialect.PostgreSQLDialect
 
 # T06 — JWT RS256 (contract api-contracts.md §2). Private key chỉ ở identity-service; keys gitignored.
 jwt:
@@ -27,6 +39,15 @@ management:
     web:
       exposure:
         include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true # N17 (C06): /actuator/health/liveness + /readiness cho container orchestration.
+      group:
+        readiness:
+          # N17 (C06): Boot 4 mặc định readiness KHÔNG gồm db — thêm tường minh để
+          # /actuator/health/readiness DOWN (503) khi DB down, UP khi DB up.
+          include: db
 
 logging:
   level:

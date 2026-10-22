@@ -9,7 +9,7 @@ import com.ridehailing.driver.repo.DriverRepository;
 import com.ridehailing.driver.repo.ReservationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
+import com.ridehailing.driver.logging.AuditLog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -119,9 +119,8 @@ public class DriverService {
                     "Driver is not free to change availability while " + fresh.status() + ".", details);
         }
         // N11 audit: driver_availability_changed — chỉ userId + status mới.
-        MDC.put("eventType", "driver_availability_changed");
-        MDC.put("result", "SUCCESS");
-        log.info("driver availability changed userId={} status={}", userId, status);
+        AuditLog.info(log, AuditLog.mdc("eventType", "driver_availability_changed", "result", "SUCCESS"),
+                "driver availability changed userId={} status={}", userId, status);
         return new AvailabilityResult(driver.id(), status, updated.get());
     }
 

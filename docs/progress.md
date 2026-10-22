@@ -557,3 +557,28 @@ T08-3..8, T08-11..17, T05-11 đánh dấu `[x]` kèm bằng chứng. Còn mở: 
 
 ### Trạng thái FIX_LIST
 **82/82 mục đánh dấu `[x]`** kèm bằng chứng (`grep -c "^- \[x\]" docs/FIX_LIST_T01-T12.md` = 82; còn 0 `- [ ]`). **T13/T14 mở khóa.**
+
+## Lượt 2026-10-22 — Đánh giá FIX_LIST và sửa L01, L03–L13
+
+Đánh giá kết quả 82 mục: [FIX_REVIEW_T01-T12_2026-10-22.md](FIX_REVIEW_T01-T12_2026-10-22.md) — 74 đạt, 6 đạt một phần, 2 không đạt (T09-6/T12-3: `DELETE ... LIMIT` lỗi cú pháp PostgreSQL). Sau đó sửa L01, L03–L13; **L02 (bằng chứng đóng góp git) còn mở**.
+
+### Việc đã làm
+- L01: cleanup `processed_commands`/`idempotency_keys` dùng subquery theo khóa chính.
+- L03/L04/L10: `CorrelationIdFilter` + `BodySizeLimitFilter` chạy trước Spring Security; `JsonRequestRejectedHandler` ×5; tắt đăng ký servlet trùng của filter security; Nginx 400 JSON.
+- L05: `logging/AuditLog` (MDC tạm thời, ghi sau commit) ở identity/driver/trip.
+- L06: Trip V5 — `outbox.schema_version` INT, backfill row cũ, CHECK routing key/aggregate version.
+- L07: candidates `ORDER BY …, id`, xử lý kinh tuyến ±180°.
+- L08: `deploy/nginx.conf`, `deploy/postgres/init/`, `deploy/rabbitmq/` (container nginx đã tạo lại).
+- L09, L11, L12, L13: devDependencies; sửa events.md §6; Nginx `details` + correlation ID từ `$request_id`; handoff ghi ràng buộc một trip active.
+- Sửa test frontend flaky `LoginPage.test.tsx` (chờ theo điều kiện thay vì sleep).
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` | BUILD SUCCESS — **233 tests / 0 failures** (identity 38, driver 110, trip 63, matching 11, payment 11); log: 0 `BadSqlGrammarException`, 0 lỗi scheduled task, 0 `}{` |
+| `npm test` ×15 (song song với Maven) | 15/15 lần 43/43 |
+| `npm run build` / `npm audit` | OK / 0 vulnerabilities |
+| identity jar + PostgreSQL tạm | `;x` → 400 ApiError có correlationId; request 401/400 có dòng log truy cập |
+| Probe Nginx :8080 | 400/404/502 JSON có `details`; correlation ID ngẫu nhiên; UUID client giữ nguyên |
+
+Chưa commit — chờ người dùng quyết định (xem L02 về tài khoản tác giả).

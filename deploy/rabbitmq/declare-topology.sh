@@ -15,7 +15,7 @@
 #   DLQs (durable): matching.dlq, trip.dlq, payment.dlq
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."   # về root repo (script nằm ở infra/rabbitmq/)
+cd "$(dirname "$0")/../.."   # về root repo (script nằm ở deploy/rabbitmq/)
 
 # F29 fix: KHÔNG `source` .env (shell thực thi nội dung file — khác cách Compose đọc dotenv).
 # Parser đơn giản: chỉ nhận dòng KEY=VALUE, bỏ comment/trống, strip CRLF và cặp quote bao quanh
@@ -50,9 +50,9 @@ export MSYS_NO_PATHCONV=1
 
 # Docker Desktop (Windows) cần host path dạng Windows; cygpath có sẵn trong Git Bash
 if command -v cygpath >/dev/null 2>&1; then
-  TOPO_HOST="$(cygpath -w "$(pwd)/infra/rabbitmq")"
+  TOPO_HOST="$(cygpath -w "$(pwd)/deploy/rabbitmq")"
 else
-  TOPO_HOST="$(pwd)/infra/rabbitmq"
+  TOPO_HOST="$(pwd)/deploy/rabbitmq"
 fi
 
 docker run --rm \

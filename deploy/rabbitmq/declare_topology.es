@@ -2,7 +2,7 @@
 %% T04 — Declare RabbitMQ topology theo spec mục 9 (idempotent, chạy lại được).
 %% Chạy trong one-off container trên mạng ridehailing_net (kết nối AMQP qua DNS "rabbitmq"):
 %%   docker run --rm -e RABBITMQ_USER -e RABBITMQ_PASSWORD -e ERL_LIBS=/opt/rabbitmq/plugins \
-%%     --network ridehailing_net -v <repo>/infra/rabbitmq:/topo:ro \
+%%     --network ridehailing_net -v <repo>/deploy/rabbitmq:/topo:ro \
 %%     rabbitmq:3.13.7-management-alpine escript /topo/declare_topology.es
 %% (F32: tag pin patch đầy đủ, khớp record framing bên dưới chép từ 3.13.7.)
 %% Topology (spec mục 9 + sửa F02 đợt 19/10/2026 — contract events.md §3.5/§3.6:

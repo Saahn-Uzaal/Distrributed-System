@@ -102,6 +102,9 @@ class TripIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private com.ridehailing.trip.service.IdempotencyKeyCleanupWorker idempotencyCleanupWorker;
+
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     @org.springframework.boot.test.web.server.LocalServerPort
@@ -309,6 +312,8 @@ class TripIntegrationTest {
                 "SELECT aggregate_version, schema_version, producer, routing_key, attempts FROM outbox WHERE aggregate_id = ?", tripId);
         assertThat(((Number) outbox.get("aggregate_version")).intValue()).isEqualTo(1);
         assertThat(outbox.get("routing_key")).isEqualTo("trip.requested");
+        // L06: schemaVersion là Integer 1 theo events.md §2, không phải chuỗi 'v1'.
+        assertThat(outbox.get("schema_version")).isInstanceOf(Integer.class).isEqualTo(1);
     }
 
     /** T12-4 (R01): canonical double — latitude 0.0 và -0.0 cùng hash -> replay 202, không 409 MISMATCH. */
@@ -717,7 +722,7 @@ class TripIntegrationTest {
                     key, hash, originalResponse);
             var upgraded = Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load();
             upgraded.migrate();
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("4");
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("5"); // L06: V5 outbox schema_version INT
             assertThat(legacy.queryForObject("SELECT principal_id FROM idempotency_keys WHERE key = ?", UUID.class, key))
                     .isEqualTo(passenger);
             assertThat(legacy.queryForObject("SELECT operation FROM idempotency_keys WHERE key = ?", String.class, key))
@@ -829,6 +834,59 @@ class TripIntegrationTest {
             assertThat(text).doesNotContain("Bearer ").doesNotContain("@example.com");
         } finally {
             logger.detachAndStopAllAppenders();
+        }
+    }
+
+    /** L01: cleanup idempotency_keys chạy được trên PostgreSQL thật (trước đây DELETE ... LIMIT lỗi cú pháp)
+     *  và chỉ xóa key quá hạn retention (24 h mặc định). */
+    @org.junit.jupiter.api.Test
+    void idempotencyCleanupDeletesOnlyExpiredKeys() {
+        UUID principal = UUID.randomUUID();
+        UUID oldKey = UUID.randomUUID();
+        UUID recentKey = UUID.randomUUID();
+        jdbc.update("INSERT INTO idempotency_keys (principal_id, operation, key, request_hash, stored_response, created_at)"
+                + " VALUES (?, 'CREATE_TRIP', ?, 'h', '{}'::jsonb, clock_timestamp() - interval '48 hours')", principal, oldKey);
+        jdbc.update("INSERT INTO idempotency_keys (principal_id, operation, key, request_hash, stored_response, created_at)"
+                + " VALUES (?, 'CREATE_TRIP', ?, 'h', '{}'::jsonb, clock_timestamp() - interval '1 hour')", principal, recentKey);
+
+        idempotencyCleanupWorker.cleanup();
+
+        List<UUID> remaining = jdbc.queryForList(
+                "SELECT key FROM idempotency_keys WHERE principal_id = ?", UUID.class, principal);
+        assertThat(remaining).containsExactly(recentKey);
+    }
+
+    /** L06: V5 đổi outbox.schema_version sang INT và backfill row TripRequested tạo trước V4
+     *  (aggregate_version 0, routing_key rỗng) để T13 publish được. */
+    @org.junit.jupiter.api.Test
+    void v5BackfillsLegacyOutboxRowsAndUsesIntegerSchemaVersion() throws Exception {
+        String schema = "upgrade_v5_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.execute("CREATE SCHEMA " + schema);
+        String url = POSTGRES.getJdbcUrl() + (POSTGRES.getJdbcUrl().contains("?") ? "&" : "?")
+                + "currentSchema=" + schema;
+        var dataSource = new DriverManagerDataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword());
+        var legacy = new JdbcTemplate(dataSource);
+        try {
+            Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).target("4").load().migrate();
+            UUID eventId = UUID.randomUUID();
+            // Row như T12 đã ghi trước V4: V4 gán mặc định aggregate_version = 0, routing_key = ''.
+            legacy.update("INSERT INTO outbox (id, event_type, aggregate_id, payload, correlation_id)"
+                    + " VALUES (?, 'TripRequested', ?, '{}'::jsonb, ?)", eventId, UUID.randomUUID(), UUID.randomUUID());
+
+            Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load().migrate();
+
+            Map<String, Object> row = legacy.queryForMap(
+                    "SELECT aggregate_version, routing_key, schema_version FROM outbox WHERE id = ?", eventId);
+            assertThat(((Number) row.get("aggregate_version")).intValue()).isEqualTo(1);
+            assertThat(row.get("routing_key")).isEqualTo("trip.requested");
+            assertThat(row.get("schema_version")).isInstanceOf(Integer.class).isEqualTo(1);
+            // Từ V5 producer bắt buộc ghi routing key thật.
+            assertThatThrownBy(() -> legacy.update("INSERT INTO outbox (id, event_type, aggregate_id, payload,"
+                    + " correlation_id, aggregate_version, routing_key) VALUES (?, 'TripRequested', ?, '{}'::jsonb, ?, 1, '')",
+                    UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        } finally {
+            jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
         }
     }
 }

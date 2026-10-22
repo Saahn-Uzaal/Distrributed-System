@@ -27,7 +27,7 @@ public class OutboxRepository {
                              UUID correlationId, Instant occurredAt, int aggregateVersion, String routingKey) {
         jdbc.update("INSERT INTO outbox (id, event_type, aggregate_id, payload, correlation_id,"
                         + " causation_id, occurred_at, status, aggregate_version, schema_version, producer, routing_key)"
-                        + " VALUES (?, ?, ?, ?::jsonb, ?, NULL, ?, 'PENDING', ?, 'v1', 'trip-service', ?)",
+                        + " VALUES (?, ?, ?, ?::jsonb, ?, NULL, ?, 'PENDING', ?, 1, 'trip-service', ?)",
                 eventId, eventType, aggregateId, payloadJson, correlationId,
                 new java.sql.Timestamp(occurredAt.toEpochMilli()), aggregateVersion, routingKey);
     }

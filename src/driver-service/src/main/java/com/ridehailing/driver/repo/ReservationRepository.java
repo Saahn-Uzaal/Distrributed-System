@@ -93,7 +93,11 @@ public class ReservationRepository {
     /** Dọn processed_commands cũ hơn N ngày (T09-6, batch hữu hạn). */
     public int deleteOldProcessedCommands(int days) {
         return jdbc.update(
-                "DELETE FROM processed_commands WHERE created_at < clock_timestamp() - make_interval(days => ?) LIMIT 1000",
+                // L01: PostgreSQL không hỗ trợ DELETE ... LIMIT — giới hạn batch bằng subquery theo khóa chính.
+                "DELETE FROM processed_commands WHERE command_id IN ("
+                        + "SELECT command_id FROM processed_commands"
+                        + " WHERE created_at < clock_timestamp() - make_interval(days => ?)"
+                        + " ORDER BY created_at LIMIT 1000)",
                 days);
     }
 

@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -18,11 +19,18 @@ import java.util.UUID;
  * T07 — correlation ID theo contract api-contracts.md §5:
  * header {@code X-Correlation-ID} hợp lệ = UUID; thiếu hoặc sai định dạng -> server tự sinh
  * UUID mới (KHÔNG reject request). Id được đặt vào request attribute + MDC để mọi log và
- * error response của request dùng chung một id. Chạy trước JwtAuthFilter (@Order(1)).
+ * error response của request dùng chung một id. Chạy trước Spring Security chain (L03).
  */
 @Component
-@Order(1)
+@Order(CorrelationIdFilter.ORDER)
 public class CorrelationIdFilter extends OncePerRequestFilter {
+
+    /**
+     * L03: chạy TRƯỚC Spring Security (springSecurityFilterChain có order -100). Nếu chạy sau,
+     * request bị chặn ở tầng security (401/403, firewall 400) không có dòng log truy cập
+     * và không có correlationId trong MDC.
+     */
+    public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 100;
 
     public static final String ATTRIBUTE = "correlationId";
     private static final Logger log = LoggerFactory.getLogger(CorrelationIdFilter.class);

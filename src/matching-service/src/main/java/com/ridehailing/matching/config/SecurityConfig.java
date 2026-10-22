@@ -23,4 +23,11 @@ public class SecurityConfig {
         http.authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         return http.build();
     }
+
+    /** L04 — firewall rejection trả ApiError JSON (WebSecurity tự nhận bean này). */
+    @Bean
+    public org.springframework.security.web.firewall.RequestRejectedHandler requestRejectedHandler(
+            tools.jackson.databind.ObjectMapper objectMapper) {
+        return new com.ridehailing.matching.security.JsonRequestRejectedHandler(objectMapper);
+    }
 }

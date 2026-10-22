@@ -15,7 +15,7 @@ import com.ridehailing.driver.web.dto.ReleaseRequest;
 import com.ridehailing.driver.web.dto.FinishRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
+import com.ridehailing.driver.logging.AuditLog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -297,13 +297,13 @@ public class ReservationService {
 
     /** N11 — audit log nghiệp vụ: eventType riêng + MDC reservationId/tripId; không ghi secret. */
     private void audit(String eventType, UUID reservationId, UUID tripId, String detail) {
-        MDC.put("reservationId", reservationId.toString());
-        if (tripId != null) {
-            MDC.put("tripId", tripId.toString());
-        }
-        MDC.put("eventType", eventType);
-        MDC.put("result", "SUCCESS");
-        log.info("{} {}", eventType, detail);
+        // L05: MDC tạm thời + ghi sau commit (rollback thì không ghi SUCCESS).
+        AuditLog.info(log, AuditLog.mdc(
+                        "reservationId", reservationId.toString(),
+                        "tripId", tripId == null ? null : tripId.toString(),
+                        "eventType", eventType,
+                        "result", "SUCCESS"),
+                "{} {}", eventType, detail);
     }
 
     private ReservationRepository.ReservationRow required(UUID id) {

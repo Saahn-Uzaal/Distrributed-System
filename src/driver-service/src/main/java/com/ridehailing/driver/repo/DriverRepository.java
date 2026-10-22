@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -125,21 +126,56 @@ public class DriverRepository {
         double latDelta = (radiusM / 1000.0) / 111.0;
         double cosLat = Math.max(Math.cos(Math.toRadians(latitude)), 1e-6);
         double lngDelta = (radiusM / 1000.0) / (111.0 * cosLat);
-        return jdbc.query(
-                "SELECT * FROM drivers"
-                        + " WHERE status = 'AVAILABLE'"
-                        + " AND last_seen_at > clock_timestamp() - make_interval(secs => ?)"
-                        + " AND latitude IS NOT NULL AND longitude IS NOT NULL"
-                        + " AND latitude BETWEEN ? AND ?"
-                        + " AND longitude BETWEEN ? AND ?"
-                        + " ORDER BY (latitude - ?) * (latitude - ?)"
-                        + "          + (longitude - ?) * (longitude - ?) * cos(radians(?)) * cos(radians(?)) ASC"
-                        + " LIMIT ?",
-                new Object[]{heartbeatStaleAfterMs / 1000.0,
-                        latitude - latDelta, latitude + latDelta,
-                        longitude - lngDelta, longitude + lngDelta,
-                        latitude, latitude, longitude, longitude, latitude, latitude, limit},
-                this::mapDriver);
+
+        List<Object> params = new ArrayList<>();
+        StringBuilder sql = new StringBuilder("SELECT * FROM drivers"
+                + " WHERE status = 'AVAILABLE'"
+                + " AND last_seen_at > clock_timestamp() - make_interval(secs => ?)"
+                + " AND latitude IS NOT NULL AND longitude IS NOT NULL"
+                + " AND latitude BETWEEN ? AND ?");
+        params.add(heartbeatStaleAfterMs / 1000.0);
+        params.add(latitude - latDelta);
+        params.add(latitude + latDelta);
+
+        // L07: kinh độ quấn quanh ±180°. Box chạm cực hoặc rộng >= 360° -> không lọc kinh độ;
+        // vượt -180/+180 -> tách thành hai khoảng.
+        double lo = longitude - lngDelta;
+        double hi = longitude + lngDelta;
+        boolean coversPole = latitude + latDelta >= 90.0 || latitude - latDelta <= -90.0;
+        if (!coversPole && lngDelta < 180.0) {
+            if (lo < -180.0) {
+                sql.append(" AND (longitude >= ? OR longitude <= ?)");
+                params.add(lo + 360.0);
+                params.add(hi);
+            } else if (hi > 180.0) {
+                sql.append(" AND (longitude >= ? OR longitude <= ?)");
+                params.add(lo);
+                params.add(hi - 360.0);
+            } else {
+                sql.append(" AND longitude BETWEEN ? AND ?");
+                params.add(lo);
+                params.add(hi);
+            }
+        }
+
+        // Khoảng cách xấp xỉ (equirectangular) với hiệu kinh độ đã quấn về [0, 180];
+        // L07: tie-break id để LIMIT cắt tập tất định (contract §4.2 tie-break driverId) —
+        // thứ tự uuid của PostgreSQL trùng thứ tự chuỗi hex chữ thường mà Java dùng.
+        sql.append(" ORDER BY (latitude - ?) * (latitude - ?)"
+                + " + LEAST(ABS(longitude - ?), 360 - ABS(longitude - ?))"
+                + " * LEAST(ABS(longitude - ?), 360 - ABS(longitude - ?))"
+                + " * cos(radians(?)) * cos(radians(?)) ASC, id ASC"
+                + " LIMIT ?");
+        params.add(latitude);
+        params.add(latitude);
+        params.add(longitude);
+        params.add(longitude);
+        params.add(longitude);
+        params.add(longitude);
+        params.add(latitude);
+        params.add(latitude);
+        params.add(limit);
+        return jdbc.query(sql.toString(), params.toArray(), this::mapDriver);
     }
 
     // RowMapper-compatible: (ResultSet, int). Method reference 1-arg (ResultSet)

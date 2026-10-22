@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Dev-only: same-origin proxy tới các service local (spec §5/§12).
-// Production: Nginx (:8080) phục vụ build và proxy /api/* — xem deploy/nginx/nginx.conf.
+// Production: Nginx (:8080) phục vụ build và proxy /api/* — xem deploy/nginx.conf.
 export default defineConfig({
   plugins: [react()],
   server: {

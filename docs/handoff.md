@@ -4,6 +4,14 @@ Cập nhật: 2026-10-22, **FIX_LIST T01–T12 (82 mục) XONG TOÀN BỘ** — 
 
 **Kết quả mới nhất:** Driver V4 + lifecycle confirm/release/finish, release-before-reserve tombstone, command claim nguyên tử, resource/operation hash, version bounds và expiry RESERVED. Trip V3 scope replay theo principal/operation/key, phân quyền qua driver_user_id, phân trang long. Candidates/event contract mang driverUserId tách biệt driverId. Test nâng cấp giữ replay cũ, contention qua deadline, fencing và restart ứng dụng đều pass. Chưa có publisher/matching/saga; không triển khai T13+ trong lượt này.
 
+## ⚠️ Đánh giá 22/10 và sửa tiếp L01–L13 (đọc trước khi làm T13)
+
+Đánh giá kết quả FIX_LIST: [FIX_REVIEW_T01-T12_2026-10-22.md](FIX_REVIEW_T01-T12_2026-10-22.md). Đã sửa L01, L03–L13 (chi tiết và bằng chứng trong file đó, mục 5). **Còn mở: L02** — bằng chứng đóng góp git (email GitHub thật, remote, mỗi thành viên commit phần mình); cần chính các thành viên làm, không tự động hóa được.
+
+**L13 — lưu ý khi test tay:** từ T12-6, mỗi passenger chỉ có tối đa một trip chưa terminal. Hiện **chưa có đường nào đưa trip ra khỏi SEARCHING** (cancel = T20, deadline NO_DRIVER = T21), nên mỗi passenger chỉ tạo được **một** trip cho đến khi xong T20/T21; passenger đã có trip SEARCHING trong DB dev sẽ luôn nhận 409 `ACTIVE_TRIP_EXISTS`. Khi test tay hãy đăng ký passenger mới; T26 (seed/smoke) phải tính đến ràng buộc này.
+
+Thay đổi đường dẫn (L08): `deploy/nginx.conf`, `deploy/postgres/init/`, `deploy/rabbitmq/` (trước đây `deploy/nginx/`, `infra/`). Container nginx cần tạo lại sau khi pull: `docker compose --env-file .env -f deploy/compose.yaml up -d nginx`.
+
 ## ✅ FIX_LIST T01–T12 — XONG TOÀN BỘ (82/82)
 
 Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cần sửa**: [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md). **Toàn bộ phase 1–8 đã xong** (đánh dấu `[x]` kèm bằng chứng): C01–C06; T07 security + nginx T08-1..17; contract T05 (N15/N21–N24/F31, T05-7..12); T07 logging F20/F21/N11/N12/N13 (+Q01/Q02); T09–T12 correctness/time + T12-6; Phase 6 infra/scripts; Phase 7 frontend + nginx; **Phase 8** (C04/C06, T06-1/T06-4, T07-11..13). Full repo `clean verify` **220 tests / 0 failures**; frontend **43/43** + build OK.
@@ -47,7 +55,7 @@ Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cầ
 - Phạm vi (spec §20.4): **Trip outbox schema/worker, publisher confirms, retry publish với eventId ổn định; phát TripRequested**.
 - Trạng thái hiện có: bảng `outbox` + row PENDING đã tạo ở T12 — T13 chỉ cần worker scan pending → build envelope chuẩn (eventId = outbox.id, producer `trip-service`, correlationId giữ nguyên, schemaVersion 1) → publish persistent + confirms qua RabbitMQ (`ride.events` rk `trip.requested`) → đánh dấu SENT; retry transient theo events.md §4.3.
 - Dependency: T04 (DONE), T12 (DONE); blocker cũ (F01+N10, N15/N21–N24/F31 trong [FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md)) **đã gỡ** — FIX_LIST 82/82 xong.
-- Nguồn sự thật: `events.md` §2/§3.1/§4.6 + topology T04 (`infra/rabbitmq/declare-topology.sh`); management API RabbitMQ ghi ở handoff trước.
+- Nguồn sự thật: `events.md` §2/§3.1/§4.6 + topology T04 (`deploy/rabbitmq/declare-topology.sh`); management API RabbitMQ ghi ở handoff trước.
 ### B. T14 — Consumer inbox và retry (owner B)
 - Dependency T04/T05/T07 đã DONE; T14 vẫn TODO, chưa có consumer nghiệp vụ được thêm trong lượt này.
 - Đọc events.md về inbox dedup, ACK sau commit, retry hữu hạn và DLQ trước khi triển khai.
@@ -55,8 +63,8 @@ Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cầ
 
 ## Ghi chú kỹ thuật hữu ích cho task sau
 - Management API RabbitMQ 3.13.7: `POST /api/queues/%2F/{q}/get` body `{"ackmode":"ack_requeue_false"|"reject_requeue_false", "count":"<n>", "encoding":"auto"|"base64"}` (GET bị 405; encoding không nhận utf8). Publish: `POST /api/exchanges/%2F/{ex}/publish`. Chi tiết trong `docs/tasks/T04.md`.
-- Declare topology lại bất cứ lúc nào: `bash infra/rabbitmq/declare-topology.sh` (idempotent, cần Docker + compose đang chạy).
-- Chạy local driver-service/trip-service cần env tiến trình: `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (+ `INTERNAL_API_TOKEN` cho driver) — **không** nằm trong Compose `.env`; dev default trong `application.yml` khớp `.env.example`.
+- Declare topology lại bất cứ lúc nào: `bash deploy/rabbitmq/declare-topology.sh` (idempotent, cần Docker + compose đang chạy).
+- Chạy local driver-service/trip-service cần env tiến trình: `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (+ `INTERNAL_API_TOKEN` cho driver) — **không** nằm trong Compose `.env`; `application.yml` **không còn** giá trị mặc định cho mật khẩu DB (N09) và driver dừng khi `INTERNAL_API_TOKEN` thiếu hoặc ngắn hơn 16 ký tự (N08) — phải set env tiến trình.
 - Frontend: build (`npm run build` ở web/) **trước** khi up nginx vì dist bind-mount; dev server `npm run dev` (:5173) có proxy /api/* tới services local.
 - Contract là nguồn sự thật: nếu khi implement T09+ phát hiện mâu thuẫn trong 3 docs contract, sửa tài liệu trước (nêu trong task log) rồi mới code.
 

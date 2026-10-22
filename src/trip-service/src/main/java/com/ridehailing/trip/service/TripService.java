@@ -15,7 +15,7 @@ import com.ridehailing.trip.security.Role;
 import com.ridehailing.trip.web.dto.QuoteRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
+import com.ridehailing.trip.logging.AuditLog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -158,10 +158,9 @@ public class TripService {
         eventRepo.insert(tripId, "TRIP_CREATED", 1, user.userId(), "Trip created in SEARCHING");
 
         // N11 audit: trip_created — MDC tripId; chỉ userId, không email/password.
-        MDC.put("tripId", tripId.toString());
-        MDC.put("eventType", "trip_created");
-        MDC.put("result", "SUCCESS");
-        log.info("trip created state=SEARCHING matchingAttempt=1 passengerUserId={}", user.userId());
+        // L05: ghi sau commit, MDC tạm thời.
+        AuditLog.info(log, AuditLog.mdc("tripId", tripId.toString(), "eventType", "trip_created", "result", "SUCCESS"),
+                "trip created state=SEARCHING matchingAttempt=1 passengerUserId={}", user.userId());
 
         return new CreateOutcome(202, body);
     }

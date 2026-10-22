@@ -23,7 +23,7 @@ services:
       PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
       # Bind localhost only (debug) — spec mục 12
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -65,7 +65,7 @@ services:
     networks: [backend]
 
   # T08 — Nginx: phục vụ frontend build (web/dist) + proxy /api/* tới services local trên host.
-  # Public port 8080 theo spec §12. Config: deploy/nginx/nginx.conf.
+  # Public port 8080 theo spec §12. Config: deploy/nginx.conf.
   nginx:
     # F32 fix: pin patch version đầy đủ (nginx:1.27.5-alpine — bản thực tế của tag 1.27).
     image: nginx:1.27.5-alpine
@@ -78,7 +78,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ../deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
       # Build frontend trước khi up nginx (npm run build ở src/web/) — C02
       - ../src/web/dist:/usr/share/nginx/html:ro
     networks: [backend]
@@ -100,7 +100,7 @@ services:
       RABBITMQ_HOST: rabbitmq
       ERL_LIBS: /opt/rabbitmq/plugins
     volumes:
-      - ../infra/rabbitmq:/topo:ro
+      - ./rabbitmq:/topo:ro
     command: escript /topo/declare_topology.es
     networks: [backend]
 

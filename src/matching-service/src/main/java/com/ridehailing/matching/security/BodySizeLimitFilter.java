@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
  * PayloadTooLargeException -> GlobalExceptionHandler trả 413 JSON.
  */
 @Component
-@Order(2)
+@Order(CorrelationIdFilter.ORDER + 1) // L03: ngay sau CorrelationIdFilter, trước Spring Security
 public class BodySizeLimitFilter extends OncePerRequestFilter {
 
     public static final int MAX_BODY_BYTES = 65_536; // 64 KiB

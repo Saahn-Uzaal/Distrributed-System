@@ -405,4 +405,71 @@ class SecurityProbeTest {
         assertThat(resp.status()).isEqualTo(400);
         assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
     }
+
+    // ---------- L03/L04 — request bị Spring Security chặn vẫn có log truy cập; firewall trả ApiError ----------
+
+    private static ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> attachAccessLogAppender() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(com.ridehailing.trip.security.CorrelationIdFilter.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private static void detachAccessLogAppender(
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender) {
+        ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(
+                com.ridehailing.trip.security.CorrelationIdFilter.class)).detachAppender(appender);
+    }
+
+    /** Dòng log truy cập được ghi sau khi response đã gửi — chờ tối đa 3 s. */
+    private static boolean accessLogged(
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender,
+            String correlation, String status) throws InterruptedException {
+        long deadline = System.nanoTime() + 3_000_000_000L;
+        while (System.nanoTime() < deadline) {
+            boolean found = new java.util.ArrayList<>(appender.list).stream().anyMatch(e ->
+                    correlation.equals(e.getMDCPropertyMap().get("correlationId"))
+                            && status.equals(e.getMDCPropertyMap().get("result"))
+                            && "http_request".equals(e.getMDCPropertyMap().get("eventType")));
+            if (found) {
+                return true;
+            }
+            Thread.sleep(20);
+        }
+        return false;
+    }
+
+    /** L04: URL bị StrictHttpFirewall chặn -> 400 ApiError có correlationId (không phải body mặc định Spring). L03: vẫn có log. */
+    @org.junit.jupiter.api.Test
+    void firewallRejectionReturnsApiErrorAndIsAccessLogged() throws Exception {
+        var appender = attachAccessLogAppender();
+        try {
+            String correlation = UUID.randomUUID().toString();
+            Resp resp = get("/api/probe;x", null, correlation);
+            assertThat(resp.status()).isEqualTo(400);
+            assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
+            assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
+            assertThat(resp.body()).doesNotContainKey("timestamp");
+            assertThat(accessLogged(appender, correlation, "400")).isTrue();
+        } finally {
+            detachAccessLogAppender(appender);
+        }
+    }
+
+    /** L03: request bị từ chối ở tầng security (401) vẫn có dòng log truy cập kèm correlationId. */
+    @org.junit.jupiter.api.Test
+    void unauthorizedRequestIsAccessLogged() throws Exception {
+        var appender = attachAccessLogAppender();
+        try {
+            String correlation = UUID.randomUUID().toString();
+            Resp resp = get("/api/trips", null, correlation);
+            assertThat(resp.status()).isEqualTo(401);
+            assertThat(accessLogged(appender, correlation, "401")).isTrue();
+        } finally {
+            detachAccessLogAppender(appender);
+        }
+    }
 }

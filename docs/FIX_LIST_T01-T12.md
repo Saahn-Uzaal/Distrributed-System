@@ -48,13 +48,15 @@ File này **chỉ gồm vấn đề nằm trong phần T01–T12 đã làm**: co
 
 ## Chung / quy trình (T01–T02)
 
-- [x] **C01 — N35 (P1): Workspace không phải git repository**
+- [ ] **C01 — N35 (P1): Workspace không phải git repository**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L02 — CÒN MỞ: có git nhưng 10 commit cùng một tác giả, email `@localhost`, chưa có remote; chưa thành bằng chứng đóng góp từng thành viên.
   - Vị trí: root (không có `.git`).
   - Vấn đề: T01–T12 đã DONE nhưng chưa có commit nào. Đề §10.1 bắt buộc lịch sử commit của từng thành viên; đề §12 ghi "không chứng minh được đóng góp" là không đạt.
   - Sửa: `git init` (hoặc clone repo GitHub có sẵn rồi chép mã vào); kiểm tra `.gitignore` đã chặn `.env`, `keys/`, `*.pem`, `src/web/dist`, `target/` **trước** lần `git add` đầu tiên. Từ đây mỗi thành viên commit phần mình sửa bằng tài khoản của chính họ. Không dựng lại lịch sử giả (spec §1).
   - Kiểm chứng: `git status` không liệt kê `.env` hay `keys/*.pem`; `git log` có commit thật.
 
 - [x] **C02 — N36 (P2): Thiếu `src/` và `tests/` mà đề bắt buộc; README ghi sai**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L08 — đã sửa 22/10: chuyển `deploy/nginx.conf`, `deploy/postgres/init/`, `deploy/rabbitmq/` đúng spec §16.
   - Vị trí: root; `README.md` mục "Cấu trúc repository"; root `pom.xml` `<modules>`.
   - Vấn đề: 5 service và `web/` nằm ở root. Đề §10.1 bắt buộc có `src/` và `tests/`. Spec §16 đặt `deploy/nginx.conf` và `deploy/postgres/init/` (hiện ở `deploy/nginx/` và `infra/postgres/init/`). README lại ghi "`src/` chứa 5 backend modules".
   - Sửa: chuyển sang `src/<service>/` và `src/web/`; cập nhật `<module>src/identity-service</module>`…, đường dẫn bind mount trong `deploy/compose.yaml`, script `infra/rabbitmq/*`, README và docs. Tạo `tests/` (ít nhất `tests/README.md` mô tả test nằm trong từng module và test hệ thống sẽ đặt ở đây). Làm trong một commit riêng trước khi sửa lỗi khác.
@@ -243,6 +245,7 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
 ## T07 — Security, error, correlation, log (cả 5 service)
 
 - [x] **T07-1 — F01 + N10 (P1): Bỏ qua xác thực bằng biến thể URL**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L03 + L04 — đã sửa 22/10: `CorrelationIdFilter`/`BodySizeLimitFilter` chạy trước Spring Security (request bị 401/403/400 trước đây không có log); firewall rejection trả ApiError qua `JsonRequestRejectedHandler`; L10 tắt đăng ký servlet trùng của filter security.
   - Vị trí: `driver-service/.../security/ApiSecurityFilter.java:51–65`; `trip-service/.../security/ApiSecurityFilter.java:47`; `identity-service/.../security/JwtAuthFilter.java:39`.
   - Vấn đề: filter so khớp `getRequestURI()` thô, trong khi MVC bỏ matrix parameter và decode trước khi định tuyến. Đã tái hiện: `PUT /internal;x/reservations/{id}` không có token → 201, driver chuyển RESERVED. Tương tự `/%69nternal/...`, `/api/trips;x` (bỏ qua kiểm tra role PASSENGER), `/api/auth/me;x` (→ 500).
   - Sửa: chuyển sang Spring Security `SecurityFilterChain` (dependency `spring-boot-starter-security`) với `authorizeHttpRequests` dùng `PathPatternRequestMatcher`, giữ `StrictHttpFirewall` mặc định (chặn `;`, `%2F`, `%25`, `..` → 400). JWT dùng `BearerTokenAuthenticationFilter` hoặc filter riêng đặt trong chain; internal token kiểm tra bằng matcher `/internal/**`. Mặc định `anyRequest().denyAll()` hoặc `authenticated()`, mở rõ ràng `/actuator/health/**`, `/api/auth/register`, `/api/auth/login`.
@@ -288,6 +291,7 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - ✅ Đã làm + kiểm chứng (2026-10-21): `JsonLogLayout.doLayout` ghi field `stackTrace` = `ThrowableProxyUtil.asString(throwable)` (`ch.qos.logback.classic.spi`) ở cả nhánh chính và fallback; test `layoutIncludesFullStackTraceWithCause` ×5: exception có cause → output chứa tên class cause + `Caused by:` + frame `at ...`. 170 tests / 0 failures.
 
 - [x] **T07-8 — N11 (P2): Không có log nghiệp vụ hay audit**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L03 + L05 — đã sửa 22/10: request bị security chặn nay có log truy cập; audit dùng `AuditLog` (MDC tạm thời, ghi sau commit), worker không còn rò MDC.
   - Vị trí: toàn bộ service code; `JsonLogLayout.STRUCTURED_MDC_KEYS`.
   - Vấn đề: chỉ có log truy cập HTTP và log lỗi. Không log register/login (kể cả thất bại), profile/availability, reserve/confirm/release/finish/expire, tạo trip. MDC `tripId`/`reservationId` không bao giờ được set; `eventType` luôn là `http_request`. Trái đề §4.1, §4.5 và spec §11.
   - Sửa: thêm log INFO có `eventType` riêng và `result`: `user_registered`, `login_succeeded`/`login_failed` (không log email đầy đủ hay password), `driver_availability_changed`, `reservation_reserved`/`confirmed`/`released`/`finished`/`expired` (set MDC `reservationId`, `tripId`), `trip_created` (set `tripId`). Expiry worker log từng reservation đã expire.
@@ -466,12 +470,14 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - ✅ Đã làm + kiểm chứng (2026-10-21): `normalizePlate()` (trim, uppercase, gộp khoảng trắng) trước khi kiểm tra và lưu; migration V5 chuẩn hóa dữ liệu cũ + unique index `uq_vehicles_plate_upper` trên `upper(plate_number)`; tests `duplicatePlateReturns409PlateTaken` và `plateNormalizationMakesCaseAndWhitespaceDuplicatesConflict` → 409 PLATE_TAKEN.
 
 - [x] **T09-5 — R05 (P3): Candidates tải toàn bộ driver AVAILABLE vào Java**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L07 — đã sửa 22/10: `ORDER BY ..., id` trước `LIMIT` (tất định khi trùng tọa độ) và bounding box quấn quanh ±180°.
   - Vị trí: `DriverService.java:124–141`; `DriverRepository.java:109`.
   - Sửa: lọc sơ bộ trong SQL bằng bounding box (lat ± radius/111 km, lng ± …/cos(lat)) + `LIMIT`, sau đó mới tính Haversine trong Java.
   - Kiểm chứng: kết quả giống hệt bản cũ trên bộ dữ liệu test; `EXPLAIN` có dùng index.
   - ✅ Đã làm + kiểm chứng (2026-10-21): `DriverRepository.findCandidatesInBox(lat,lng,radiusM,staleMs,limit)` — bounding box trong SQL + LIMIT rồi mới Haversine trong Java; tests `candidatesExcludeOfflineStaleAndFar` / `candidatesDeterministicOrderAndTieBreak` / `candidatesClampsLimitAndValidatesParams` pass với kết quả như bản cũ.
 
 - [x] **T09-6 — N32 phần Driver (P3): Thiếu cột theo spec §7**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L01 — **bản sửa ban đầu KHÔNG chạy** (`DELETE ... LIMIT` lỗi cú pháp PostgreSQL, worker lỗi mỗi chu kỳ); đã sửa 22/10 bằng subquery theo khóa chính + integration test.
   - Vị trí: Driver V2/V3.
   - Vấn đề: `drivers` thiếu `version`; `vehicles` thiếu `updated_at`; `processed_commands` không có cơ chế dọn dữ liệu cũ.
   - Sửa: migration V5 thêm các cột (hoặc ghi lý do không thêm vào "lệch đặc tả có chủ đích" của C04, ví dụ fencing bằng pointer thay cho version); job dọn `processed_commands` cũ hơn N ngày.
@@ -547,12 +553,14 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - ✅ Đã làm + kiểm chứng (2026-10-21): một timestamp duy nhất `Instant.now().truncatedTo(SECONDS)` dùng cho response, bản lưu replay, `trips.created_at` và `outbox.occurred_at`; test `TripIntegrationTest.createdAtIsStableAcrossGetAndReplay` — POST/GET/DB/replay trả cùng giá trị.
 
 - [x] **T12-2 — N33 (P3): Bảng outbox thiếu field cho envelope và retry**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L06 — đã sửa 22/10: migration Trip V5 đổi `schema_version` sang INT (=1 theo events.md §2), backfill row cũ (`aggregate_version=1`, `routing_key=trip.requested`) và thêm CHECK.
   - Vị trí: `trip-service/.../V2__trips.sql` bảng `outbox`; `OutboxRepository.insertPending`.
   - Sửa: migration thêm `aggregate_version` (chụp `trips.version` lúc ghi — bắt buộc làm ngay vì không suy lại được), `schema_version`, `producer`, `routing_key`, `attempts`, `next_attempt_at`, `last_error`; `insertPending` ghi `aggregate_version = 1` cho TripRequested.
   - Kiểm chứng: test create → outbox có `aggregate_version = 1`, `routing_key = trip.requested`.
   - ✅ Đã làm + kiểm chứng (2026-10-21): migration V4 thêm `aggregate_version/schema_version/producer/routing_key/attempts/next_attempt_at/last_error` cho outbox; `insertPending` ghi `aggregate_version=1`, `routing_key='trip.requested'`; test `outboxRowCarriesAggregateVersionAndRoutingKey`.
 
 - [x] **T12-3 — N32 phần Trip (P3): Thiếu cột/ràng buộc theo spec §7**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L01 — **bản sửa ban đầu KHÔNG chạy** (`DELETE ... LIMIT` lỗi cú pháp PostgreSQL); đã sửa 22/10 bằng subquery theo khóa chính 3 cột + integration test.
   - Vị trí: Trip V2/V3.
   - Vấn đề: `trips` thiếu `reservation_id`; `trip_events.id` là BIGSERIAL (spec yêu cầu UUID) và thiếu unique `(trip_id, type, version)` để chống ghi trùng lịch sử khi retry; `idempotency_keys` không có cơ chế dọn dữ liệu cũ.
   - Sửa: migration V4 thêm `reservation_id`, unique `(trip_id, type, version)`, đổi hoặc ghi lý do giữ BIGSERIAL; job dọn idempotency key cũ (ví dụ > 24 h).
@@ -571,6 +579,7 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - ✅ Đã làm + kiểm chứng (2026-10-21): `list()` đặt `@Transactional(readOnly=true, isolation=Isolation.REPEATABLE_READ)` — count và content đọc cùng snapshot; test `listUnderRepeatableReadStaysConsistentWithConcurrentCreates`.
 
 - [x] **T12-6 — N28 (P3): Không giới hạn số chuyến active của một passenger**
+  - ⚠️ Đánh giá 22/10 ([FIX_REVIEW](FIX_REVIEW_T01-T12_2026-10-22.md)): L13 — lưu ý: chưa có cancel/NO_DRIVER (T20/T21) nên hiện mỗi passenger chỉ tạo được một trip; đã ghi vào handoff.
   - Vị trí: `TripService.create:81–134`.
   - Sửa (sau khi chốt T05-10): trong transaction, khóa theo passenger (advisory lock) rồi kiểm tra có chuyến state chưa terminal hay không → 409 `ACTIVE_TRIP_EXISTS`; hoặc dùng partial unique index `(passenger_id) WHERE state IN ('SEARCHING','DRIVER_OFFERED','CANCELLING','ACCEPTED','IN_PROGRESS')`.
   - Kiểm chứng: hai create đồng thời với hai key khác nhau → một 202, một 409; replay cùng key vẫn 202.

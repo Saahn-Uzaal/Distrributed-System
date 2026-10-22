@@ -1,6 +1,7 @@
 package com.ridehailing.driver.service;
 
 import com.ridehailing.driver.repo.ReservationRepository;
+import com.ridehailing.driver.logging.AuditLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -35,7 +36,10 @@ public class ReservationExpiryWorker {
                 service.expireIfUnlocked(id);
             } catch (Exception e) {
                 // Cô lập lỗi từng item: log và tiếp tục với reservation còn lại.
-                log.error("reservation expiry failed reservationId={}", id, e);
+                // L05: MDC tạm thời cho dòng lỗi, không mang eventType/result của item trước.
+                AuditLog.withMdc(AuditLog.mdc("reservationId", id.toString(),
+                                "eventType", "reservation_expiry_failed", "result", "FAILURE"),
+                        () -> log.error("reservation expiry failed reservationId={}", id, e));
             }
         }
     }

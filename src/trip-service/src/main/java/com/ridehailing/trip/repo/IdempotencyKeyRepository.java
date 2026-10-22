@@ -48,7 +48,11 @@ public class IdempotencyKeyRepository {
     /** T12-3 (N32 trip): dọn idempotency key cũ hơn N giờ (batch hữu hạn 1000 row/chu kỳ). */
     public int deleteOldKeys(int hours) {
         return jdbc.update(
-                "DELETE FROM idempotency_keys WHERE created_at < clock_timestamp() - make_interval(hours => ?) LIMIT 1000",
+                // L01: PostgreSQL không hỗ trợ DELETE ... LIMIT — giới hạn batch bằng subquery theo khóa chính 3 cột.
+                "DELETE FROM idempotency_keys WHERE (principal_id, operation, key) IN ("
+                        + "SELECT principal_id, operation, key FROM idempotency_keys"
+                        + " WHERE created_at < clock_timestamp() - make_interval(hours => ?)"
+                        + " ORDER BY created_at LIMIT 1000)",
                 hours);
     }
 

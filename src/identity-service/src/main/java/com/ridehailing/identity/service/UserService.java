@@ -13,7 +13,7 @@ import com.ridehailing.identity.web.dto.RegisterRequest;
 import com.ridehailing.identity.web.dto.UserResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
+import com.ridehailing.identity.logging.AuditLog;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -82,9 +82,8 @@ public class UserService {
                 Instant.now());
         users.save(user);
         // N11 audit: user_registered — chỉ userId + role, không email/password.
-        MDC.put("eventType", "user_registered");
-        MDC.put("result", "SUCCESS");
-        log.info("user registered userId={} role={}", user.getId(), user.getRole());
+        AuditLog.info(log, AuditLog.mdc("eventType", "user_registered", "result", "SUCCESS"),
+                "user registered userId={} role={}", user.getId(), user.getRole());
         return toResponse(user);
     }
 
@@ -101,15 +100,13 @@ public class UserService {
         }
         if (user == null || !passwordEncoder.matches(req.password(), user.getPasswordHash())) {
             // N11 audit: login_failed — message không chứa email đầy đủ hay password.
-            MDC.put("eventType", "login_failed");
-            MDC.put("result", "FAILURE");
-            log.info("login failed (invalid credentials)");
+            AuditLog.info(log, AuditLog.mdc("eventType", "login_failed", "result", "FAILURE"),
+                    "login failed (invalid credentials)");
             throw new InvalidCredentialsException();
         }
         // N11 audit: login_succeeded — chỉ userId + role.
-        MDC.put("eventType", "login_succeeded");
-        MDC.put("result", "SUCCESS");
-        log.info("login succeeded userId={} role={}", user.getId(), user.getRole());
+        AuditLog.info(log, AuditLog.mdc("eventType", "login_succeeded", "result", "SUCCESS"),
+                "login succeeded userId={} role={}", user.getId(), user.getRole());
         return new LoginResponse(jwt.issue(user), jwt.getExpiresInSeconds(), toResponse(user));
     }
 

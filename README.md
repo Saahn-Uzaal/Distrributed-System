@@ -46,14 +46,14 @@ docker exec ridehailing-postgres psql -U postgres_admin -Atc "\l"
 
 - Mỗi service chỉ truy cập được DB của mình (user `*_svc`); `postgres_admin` chỉ dùng cho init/debug.
 - Dữ liệu nằm trong named volume; stop/start không xóa dữ liệu.
-- Init script (`infra/postgres/init/01-create-databases.sh`) chỉ chạy khi volume mới; mật khẩu đọc từ env, không hardcode.
+- Init script (`deploy/postgres/init/01-create-databases.sh`) chỉ chạy khi volume mới; mật khẩu đọc từ env, không hardcode.
 
 ## Local infrastructure — RabbitMQ (T04)
 
 Topology được declare **tự động** bởi service one-shot `topo-declare` trong compose (chạy sau khi broker healthy) — mỗi lần `docker compose up -d`, kể cả sau `down -v`, queue/binding tồn tại mà không cần chạy tay. Script thủ công vẫn giữ làm công cụ phụ:
 
 ```bash
-bash infra/rabbitmq/declare-topology.sh   # idempotent — declare topology theo spec mục 9
+bash deploy/rabbitmq/declare-topology.sh   # idempotent — declare topology theo spec mục 9
 ```
 
 Nếu broker đã chạy sẵn và volume bị reset khi container còn sống, chạy lại script (hoặc `docker compose up -d --force-recreate topo-declare`).
@@ -103,7 +103,7 @@ docker exec ridehailing-rabbitmq rabbitmqctl list_queues name durable
 ```
 Nếu broker chạy sẵn mà volume bị reset khi container còn sống, chạy lại script thủ công (idempotent — không xóa queue/volume):
 ```bash
-bash infra/rabbitmq/declare-topology.sh
+bash deploy/rabbitmq/declare-topology.sh
 ```
 
 ### 3. Sinh JWT dev keys (một lần; `--force` để tạo lại) — cần OpenSSL
@@ -159,7 +159,7 @@ docker compose --env-file .env -f deploy/compose.yaml up -d nginx
 Theo đề §10.1 và đặc tả mục 16 (C02):
 - `src/` — 5 backend modules (`identity-service`, `driver-service`, `trip-service`, `matching-service`, `payment-service`) + frontend `web/`.
 - `tests/` — test hệ thống cấp project sẽ đặt ở đây; unit/integration test hiện nằm trong từng module (xem `tests/README.md`).
-- `deploy/` — compose + nginx config; `infra/` — init PostgreSQL + declare RabbitMQ topology.
+- `deploy/` — `compose.yaml`, `nginx.conf`, `postgres/init/` (init 5 DB/user), `rabbitmq/` (declare topology) — đúng cấu trúc spec §16.
 - `scripts/`, `docs/`; `keys/` và `.env` gitignored.
 
 ## Tài liệu dự án

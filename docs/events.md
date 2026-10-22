@@ -1,6 +1,6 @@
 # Event Contracts — RabbitMQ (DS03)
 
-Trạng thái: **CHỐT** (2026-10-18, task T05; cập nhật topology 2026-10-19 đợt sửa F02 — thêm binding `payment.#` → `trip.inbox`; cập nhật 2026-10-21 đợt sửa FIX_LIST: N15 mandatory/returns, N21 hành vi NoDriverFound/hết candidate, N23 republish DLQ). Topology khớp 1:1 với topology đã declare và kiểm chứng ở T04 + F02 (`infra/rabbitmq/declare-topology.sh`). Chưa có consumer nghiệp vụ — các task T13/T14+ implement đúng theo đây.
+Trạng thái: **CHỐT** (2026-10-18, task T05; cập nhật topology 2026-10-19 đợt sửa F02 — thêm binding `payment.#` → `trip.inbox`; cập nhật 2026-10-21 đợt sửa FIX_LIST: N15 mandatory/returns, N21 hành vi NoDriverFound/hết candidate, N23 republish DLQ). Topology khớp 1:1 với topology đã declare và kiểm chứng ở T04 + F02 (`deploy/rabbitmq/declare-topology.sh`). Chưa có consumer nghiệp vụ — các task T13/T14+ implement đúng theo đây.
 
 ## 1. Transport & topology (khớp T04)
 
@@ -18,7 +18,7 @@ Quy tắc transport chốt:
 - **Message bị broker trả về (returned — không có binding/routing key khớp):** outbox **giữ PENDING**, ghi `last_error`, **không** đánh dấu SENT; worker retry ở vòng quét kế tiếp. Không bao giờ coi returned là đã gửi.
 - Delivery semantics: **at-least-once + dedup phía consumer** (inbox unique `(consumer_name, event_id)`; ACK sau khi transaction nghiệp vụ + inbox record commit cùng transaction).
 - Mỗi service nhận event qua **queue riêng** — không chia sẻ queue giữa hai consumer khác nghiệp vụ.
-- **Topology được declare bởi service khi khởi động** (Spring AMQP declarables: exchange/queue/binding đúng như bảng trên); `infra/rabbitmq/declare-topology.sh` chỉ là công cụ phụ cho debug và reset volume broker.
+- **Topology được declare bởi service khi khởi động** (Spring AMQP declarables: exchange/queue/binding đúng như bảng trên); `deploy/rabbitmq/declare-topology.sh` chỉ là công cụ phụ cho debug và reset volume broker.
 
 ## 2. Envelope chuẩn (schemaVersion = 1)
 
@@ -132,5 +132,5 @@ Payload:
 
 ## 6. DLQ và replay
 
-- Hai đường vào DLQ: (a) **republish chủ động** cho event malformed/unsupported (§2) — message mang `x-death` **và** `x-dlq-reason`; (b) `reject(requeue=false)` sau khi hết retry transient (§4.3) — message chỉ mang `x-death`.
+- Hai đường vào DLQ: (a) **republish chủ động** cho event malformed/unsupported (§2) — message mang header `x-dlq-reason` (**không** có `x-death`, vì broker không dead-letter message này; sửa L11); (b) `reject(requeue=false)` sau khi hết retry transient (§4.3) — broker dead-letter nên message chỉ mang `x-death`, không có `x-dlq-reason`. Script replay phải xử lý được cả hai dạng.
 - `scripts/replay-dlq.sh` (phạm vi T26/T31): đọc DLQ qua management API, hiển thị từng event, replay **có chủ đích** sau khi sửa lỗi — giữ nguyên `eventId`, không sửa payload của event cũ để giả thành công.

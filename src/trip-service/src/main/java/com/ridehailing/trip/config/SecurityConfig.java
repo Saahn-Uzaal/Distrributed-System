@@ -56,4 +56,21 @@ public class SecurityConfig {
         http.addFilterAfter(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
+
+    /** L04 — firewall rejection trả ApiError JSON (WebSecurity tự nhận bean này). */
+    @Bean
+    public org.springframework.security.web.firewall.RequestRejectedHandler requestRejectedHandler(
+            tools.jackson.databind.ObjectMapper objectMapper) {
+        return new com.ridehailing.trip.security.JsonRequestRejectedHandler(objectMapper);
+    }
+
+    /** L10 — filter này chỉ chạy trong SecurityFilterChain; tắt đăng ký servlet tự động của Boot
+     *  (mọi bean Filter đều bị Boot đăng ký thêm một lần ở servlet container). */
+    @Bean
+    public org.springframework.boot.web.servlet.FilterRegistrationBean<JwtAuthenticationFilter> jwtAuthenticationFilterRegistration(JwtAuthenticationFilter filter) {
+        org.springframework.boot.web.servlet.FilterRegistrationBean<JwtAuthenticationFilter> registration =
+                new org.springframework.boot.web.servlet.FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
 }

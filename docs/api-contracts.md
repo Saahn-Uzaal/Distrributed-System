@@ -358,7 +358,7 @@ Sau khi trip COMPLETED: chỉ từ state `CONFIRMED` (khớp tripId) → termina
 ## 5. Correlation ID (chốt)
 
 1. Mọi request public/internal mang `X-Correlation-ID`. Giá trị hợp lệ = UUID; **thiếu hoặc sai định dạng → server tự sinh UUID mới** (không reject request).
-2. Service truyền tiếp header này sang mọi HTTP call ra ngoài (internal calls, Nginx entrypoint tạo nếu client không gửi). Gateway Nginx giữ UUID hợp lệ do client gửi, nếu không thì sinh từ `$request_id_uuid`; truyền cho backend qua `proxy_set_header X-Correlation-ID` và ghi vào access log. Service canonicalize giá trị (UUID chuẩn hóa — T07-10/N13) và echo lại trong response header + body lỗi.
+2. Service truyền tiếp header này sang mọi HTTP call ra ngoài (internal calls, Nginx entrypoint tạo nếu client không gửi). Gateway Nginx giữ UUID hợp lệ do client gửi; nếu không có thì sinh từ `$request_id` (32 hex ngẫu nhiên của Nginx) định dạng lại thành UUID 8-4-4-4-12 (chốt L12). Truyền cho backend qua `proxy_set_header X-Correlation-ID` và ghi vào access log. Service canonicalize giá trị (UUID chuẩn hóa — T07-10/N13) và echo lại trong response header + body lỗi.
 3. Outbox event mang `correlationId` của request gốc khởi tạo luồng; consumer log bằng `event.correlationId`. Event hồi phục/replay giữ correlation gốc.
 4. Mọi response lỗi luôn chứa `correlationId`.
 

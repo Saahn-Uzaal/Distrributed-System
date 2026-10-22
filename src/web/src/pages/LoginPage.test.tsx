@@ -71,8 +71,9 @@ describe('LoginPage — F16: login cũ hoàn tất muộn không ghi đè phiên
     const buttonA = Array.from(container.querySelectorAll('#a button')).find((b) => b.textContent === 'Đăng nhập')!
     fireEvent.click(buttonA)
 
-    // Đợi để chắc chắn #1 đã bump generation và fetch đang treo.
-    await new Promise((r) => setTimeout(r, 30))
+    // Đợi đến khi #1 thực sự đã gọi fetch (đã bump generation và đang treo) — chờ theo điều kiện,
+    // không đoán bằng sleep cố định (flaky khi máy bận).
+    await waitFor(() => expect(fetchCalls).toBe(1))
 
     // Login #2 (nhanh) — bắt đầu sau.
     const inputsB = container.querySelectorAll('#b input')
@@ -91,8 +92,8 @@ describe('LoginPage — F16: login cũ hoàn tất muộn không ghi đè phiên
     const storedAfter = JSON.parse(sessionStorage.getItem('ridehailing.session')!) as { token: string }
     expect(storedAfter.token).toBe('token-B')
 
-    // #2 navigate về home của role (router B).
-    expect(screen.getByTestId('loc').textContent).toBe('/passenger')
+    // #2 navigate về home của role (router B) — route mới render sau khi lưu session, nên phải chờ.
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/passenger'))
   })
 
   it('unmount trong lúc chờ -> fetch bị abort, không lưu session', async () => {

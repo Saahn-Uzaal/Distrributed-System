@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -13,5 +14,9 @@ export default defineConfig({
       '/api/trips': 'http://localhost:8083',
       '/api/notifications': 'http://localhost:8083'
     }
+  },
+  test: {
+    // Môi trường mặc định node; file test jsdom khai báo qua docblock @vitest-environment.
+    setupFiles: ['./src/test/setup.ts']
   }
 })

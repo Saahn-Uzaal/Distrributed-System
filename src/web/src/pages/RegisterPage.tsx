@@ -1,15 +1,26 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Alert, Button, Card, Form, Input, Select, Typography } from 'antd'
 import { api, ApiError } from '../api/client'
 import { saveSession, routeForRole } from '../auth/session'
-import { validateFullName, validatePassword } from '../auth/validation'
+import { bumpAuthGeneration, getAuthGeneration } from '../auth/generation'
+import { validateEmail, validateFullName, validatePassword } from '../auth/validation'
 
 export default function RegisterPage(): ReactElement {
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  // F16: continuation của register/login cũ không được ghi đè phiên mới.
+  const mountedRef = useRef(true)
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+      abortRef.current?.abort()
+    }
+  }, [])
 
   async function onFinish(values: {
     email: string
@@ -19,13 +30,26 @@ export default function RegisterPage(): ReactElement {
   }): Promise<void> {
     setError(null)
     setLoading(true)
+    const gen = bumpAuthGeneration()
+    const controller = new AbortController()
+    abortRef.current = controller
     try {
-      await api.register(values)
+      await api.register(values, controller.signal)
       // register không trả token (contract §3.1) → đăng nhập ngay sau đó
-      const res = await api.login(values.email, values.password)
-      saveSession(res.accessToken, res.user)
-      navigate(routeForRole(res.user.role))
+      try {
+        const res = await api.login(values.email, values.password, controller.signal)
+        // F16: chỉ lưu phiên + navigate nếu không có luồng auth mới hơn và component còn mounted.
+        if (!mountedRef.current || gen !== getAuthGeneration()) return
+        saveSession(res.accessToken, res.user, res.expiresIn)
+        navigate(routeForRole(res.user.role))
+      } catch (e2) {
+        // F18: register 201 nhưng login lỗi -> dẫn về trang đăng nhập kèm thông báo
+        // (truyền qua location.state vì component này unmount sau khi navigate).
+        if (!mountedRef.current || gen !== getAuthGeneration()) return
+        navigate('/login', { state: { notice: 'Đăng ký thành công, vui lòng đăng nhập.' } })
+      }
     } catch (e) {
+      if (!mountedRef.current) return
       setError(e instanceof ApiError ? `${e.code}: ${e.message}` : 'Lỗi không xác định')
     } finally {
       setLoading(false)
@@ -36,11 +60,24 @@ export default function RegisterPage(): ReactElement {
     <Card title="Đăng ký" style={{ maxWidth: 420, margin: '48px auto' }}>
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
       <Form layout="vertical" onFinish={onFinish}>
-        <Form.Item label="Email" name="email" rules={[{ required: true, type: 'email' }]}>
+        {/* F17: email khớp backend — không blank, ≤ 254 ký tự (định dạng do AntD kiểm tra). */}
+        <Form.Item
+          label="Email"
+          name="email"
+          rules={[
+            { required: true, type: 'email' },
+            {
+              validator: (_rule, value?: string) => {
+                const err = validateEmail(value ?? '')
+                return err ? Promise.reject(new Error(err)) : Promise.resolve()
+              }
+            }
+          ]}
+        >
           <Input />
         </Form.Item>
-        {/* R06 fix: validation khớp contract §3.1 — password theo BYTE UTF-8 (≤72),
-            fullName kiểm tra sau trim (2–100). */}
+        {/* R06 + F17 fix: validation khớp contract §3.1 — password theo BYTE UTF-8 (≤72),
+            không toàn whitespace; fullName kiểm tra sau trim (Java semantics). */}
         <Form.Item
           label="Họ tên (2–100 ký tự, bỏ khoảng trắng hai đầu)"
           name="fullName"

@@ -194,9 +194,10 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Vị trí: `docs/api-contracts.md` §3.3 POST /api/trips.
   - Sửa: chốt "mỗi passenger tối đa một chuyến chưa terminal → 409 `ACTIVE_TRIP_EXISTS`" (khuyến nghị; cài đặt ở T12-6), hoặc ghi rõ cho phép nhiều chuyến.
 
-- [ ] **T05-11 — N06 phần contract (P3): Bảng mã lỗi không có mã cho rate limit**
+- [x] **T05-11 — N06 phần contract (P3): Bảng mã lỗi không có mã cho rate limit**
   - Vị trí: `docs/api-contracts.md` §1.2.
   - Sửa: thêm `429 RATE_LIMITED` (cài đặt ở T08-6).
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): thêm dòng `429 RATE_LIMITED` vào bảng mã lỗi contract §1.2; cài đặt nginx ở T08-6 đã kiểm chứng thật (burst → 429 JSON).
 
 - [ ] **T05-12 — N07 (P3): Một internal token dùng chung, không phân quyền theo caller**
   - Vị trí: `docs/api-contracts.md` §2 và quyết định #8.
@@ -337,33 +338,39 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Kiểm chứng: `/api/authx` → 404 JSON (xem T08-5).
   - ✅ Đã làm + kiểm chứng (2026-10-21): thay prefix location bằng cặp boundary `location = /api/X` + `location /api/X/` (proxy_pass kèm slash cuối) cho auth/drivers/trips/notifications. Kiểm chứng thật với backend chạy: `/api/driversfoo`, `/api/authx` → KHÔNG proxy (rơi SPA fallback HTML — JSON 404 đầy đủ theo T08-5, ghi nhận); exact `/api/drivers` và subpath `/api/drivers/status`, `/api/drivers/profile/{id}` proxy đúng tới driver (401 JSON ApiError).
 
-- [ ] **T08-3 — F22 (P2): Lỗi 502/504/rate-limit trả HTML**
+- [x] **T08-3 — F22 (P2): Lỗi 502/504/rate-limit trả HTML**
   - Vị trí: `deploy/nginx/nginx.conf:49,84`.
   - Sửa: `error_page 502 503 504 = @json_error;` với `location @json_error { default_type application/json; return 502 '{"code":"UPSTREAM_UNAVAILABLE",...}'; }`; mã tương ứng thêm vào contract §1.2.
   - Kiểm chứng: backend tắt → `application/json` theo đúng định dạng ApiError.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `error_page 502/503/504 = @json_5xx` — named locations riêng cho từng status (`@json_502/@json_503/@json_504`) trả JSON `UPSTREAM_UNAVAILABLE` kèm `$cid` + header `X-Correlation-ID`; thêm dòng `502/503/504 UPSTREAM_UNAVAILABLE` vào contract §1.2. Kiểm chứng thật qua :8080 (backend tắt): `/api/drivers` → 502 `{"code":"UPSTREAM_UNAVAILABLE",...,"correlationId":...}` + header `X-Correlation-ID`.
 
-- [ ] **T08-4 — F23 (P3): Lỗi Nginx không có correlationId**
+- [x] **T08-4 — F23 (P3): Lỗi Nginx không có correlationId**
   - Vị trí: `deploy/nginx/nginx.conf:23,84`; `web/public/errors/payload-too-large.json`.
   - Sửa: dùng chung biến correlation của T08-8 trong body lỗi (`return` có biến thay cho file tĩnh) và header `X-Correlation-ID`.
   - Kiểm chứng: body 65 537 byte kèm header UUID → 413 có cùng correlationId.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `error_page 413 = @json_payload_too_large` — JSON động với `$cid` trong body và header `X-Correlation-ID`; xóa file tĩnh `src/web/public/errors/payload-too-large.json`. Kiểm chứng thật: POST `/api/auth/login` body 70 043 byte kèm UUID → 413, `correlationId` trong body = UUID đã gửi (header trùng).
 
-- [ ] **T08-5 — F24 (P3): API path lạ rơi vào SPA fallback, trả 200 HTML**
+- [x] **T08-5 — F24 (P3): API path lạ rơi vào SPA fallback, trả 200 HTML**
   - Vị trí: `deploy/nginx/nginx.conf:87`.
   - Sửa: thêm `location /api/ { return 404 JSON; }` trước `location /`.
   - Kiểm chứng: `/api/does-not-exist` → 404 JSON.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `location = /api` + `location /api/` trả 404 JSON `NOT_FOUND` trước SPA fallback. Kiểm chứng thật: `/api/does-not-exist` và `/api/driversfoo` → 404 JSON với cid.
 
-- [ ] **T08-6 — N06 (P3): Rate limit trả 503 thay vì 429**
+- [x] **T08-6 — N06 (P3): Rate limit trả 503 thay vì 429**
   - Vị trí: `deploy/nginx/nginx.conf`.
   - Sửa: `limit_req_status 429;` kèm body JSON `RATE_LIMITED` (contract xem T05-11).
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `limit_req_status 429;` + `error_page 429 = @json_rate_limited` trả JSON `RATE_LIMITED`. Kiểm chứng thật: burst 8 request `/api/auth/login` (zone login_limit 5r/s burst=5) → 7×502 + 1×429; body 429 = `{"code":"RATE_LIMITED","message":"Too many requests. Try again later.","correlationId":...}` trùng UUID đã gửi.
 
-- [ ] **T08-7 — N05 (P3): Lộ phiên bản Nginx**
+- [x] **T08-7 — N05 (P3): Lộ phiên bản Nginx**
   - Sửa: `server_tokens off;` trong block `http`.
   - Kiểm chứng: header `Server: nginx` không còn số phiên bản.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `server_tokens off;` trong block http. Kiểm chứng thật: mọi response qua :8080 có `Server: nginx` không kèm phiên bản.
 
-- [ ] **T08-8 — N12 phần Nginx (P3): Nginx không tạo hoặc truyền correlation ID**
+- [x] **T08-8 — N12 phần Nginx (P3): Nginx không tạo hoặc truyền correlation ID**
   - Vị trí: `deploy/nginx/nginx.conf`.
   - Sửa: `map $http_x_correlation_id $cid { "~^[0-9a-fA-F-]{36}$" $http_x_correlation_id; default $request_id_uuid; }` (định dạng `$request_id` thành dạng UUID hoặc để service tự sinh và ghi rõ trong contract §5.2); `proxy_set_header X-Correlation-ID $cid;` và thêm `$cid` vào `log_format`.
   - Kiểm chứng: request không gửi header → access log của Nginx và log của service có cùng ID.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `map $http_x_correlation_id $cid { "~^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" $http_x_correlation_id; default $gen_cid; }` + `proxy_set_header X-Correlation-ID $cid;` ở cả 8 proxy locations + `$cid` trong `log_format main`. **Deviation ghi nhận:** image pin `nginx:1.27.5-alpine` KHÔNG có module request_id (`$request_id_uuid` không tồn tại — `nginx -t` báo unknown variable) nên `$gen_cid` sinh bằng chuỗi 5 `map` thuần config (msec+connection+request_length-remote_port → nhân đôi ≥32 chữ số → cắt 32 → format 8-4-4-4-12; chữ số thập phân hợp lệ hex, backend `CorrelationIdFilter` parse được). Kiểm chứng thật: (a) không header → 502 JSON correlationId = ID sinh, access log (`docker logs` — access.log là symlink `/dev/stdout`, xem docs/tasks/T08.md) ghi `cid=` trùng; (b) echo server Node :8082 nhận đúng X-Correlation-ID đã gửi và cả ID nginx sinh.
 
 - [x] **T08-9 — N14 (P2): `host.docker.internal` không tồn tại trên Docker Engine Linux**
   - Vị trí: `deploy/compose.yaml` service nginx.
@@ -378,38 +385,45 @@ Tiêu chí DONE của T05 là "không còn lựa chọn mơ hồ". Các mục d�
   - Kiểm chứng: unit test giả lập không có `randomUUID`; mở bằng IP LAN và đăng nhập được.
   - ✅ Đã làm + kiểm chứng (Phase 6): `uuidV4Fallback()` (UUID v4 từ `crypto.getRandomValues`, set version/variant bits) + `newUuid()` trong `src/web/src/api/client.ts`; test mới `src/api/uuid.test.ts` (3 cases: UUID hợp lệ ở secure context, 1000 UUID fallback unique khớp regex v4, giả lập non-secure context). `npm test`: 16/16 pass.
 
-- [ ] **T08-11 — F15 (P2): 401 muộn của token cũ xóa phiên mới**
+- [x] **T08-11 — F15 (P2): 401 muộn của token cũ xóa phiên mới**
   - Vị trí: `src/web/src/api/client.ts:57–58`.
   - Sửa: chỉ `clearSession()` nếu token đang lưu vẫn là token đã gửi đi (so sánh token hoặc số thế hệ phiên).
   - Kiểm chứng: test với fetch hoãn: gửi bằng A, lưu B, A trả 401 → B vẫn còn.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `client.ts` giữ `sentToken`; chỉ `clearSession()` khi `loadSession()?.token === sentToken`. Test jsdom: fetch hoãn — gửi A, lưu B giữa chừng, A trả 401 → B vẫn còn; 401 token khớp → xóa session; login 401 không đụng session.
 
-- [ ] **T08-12 — F16 (P2): Login/register cũ hoàn tất muộn ghi đè phiên mới**
+- [x] **T08-12 — F16 (P2): Login/register cũ hoàn tất muộn ghi đè phiên mới**
   - Vị trí: `src/web/src/pages/LoginPage.tsx:17–19`; `RegisterPage.tsx:23–27`.
   - Sửa: tăng một bộ đếm "auth generation" mỗi lần login/logout; continuation chỉ được `saveSession` và `navigate` khi generation khớp và component còn mounted (AbortController khi unmount).
   - Kiểm chứng: test hai lần login chồng nhau → phiên lưu lại là của lần bắt đầu sau.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `auth/generation.ts` — bộ đếm module-level; bump khi bắt đầu submit login/register và logout; continuation chỉ saveSession+navigate khi generation khớp và component còn mounted (AbortController abort khi unmount). Test jsdom: hai lần login chồng nhau (hai MemoryRouter độc lập) → phiên lưu là của lần bắt đầu sau; unmount giữa chừng → fetch bị abort, không ghi session.
 
-- [ ] **T08-13 — F17 (P3): Validation frontend và backend lệch nhau**
+- [x] **T08-13 — F17 (P3): Validation frontend và backend lệch nhau**
   - Vị trí: `src/web/src/auth/validation.ts:24,35–36`; `RegisterPage.tsx:39,65`; `LoginPage.tsx:31`.
   - Vấn đề: JS `trim()` bỏ NBSP còn Java `trim()` thì không (và ngược lại với U+001F); mật khẩu toàn dấu cách qua được frontend; email >254 ký tự qua được AntD.
   - Sửa: chốt định nghĩa trim chung (chỉ ký tự ≤ U+0020 như Java `trim()`, hoặc dùng `strip()` ở backend và `/^\s+|\s+$/` tương đương ở frontend), áp dụng cả hai bên; frontend chặn mật khẩu toàn khoảng trắng và email >254.
   - Kiểm chứng: thêm các ca ở review 20/10 vào `validation.test.ts` và vào test Identity.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `javaTrim()` trong `validation.ts` (bỏ codePoints ≤ U+0020 — đúng Java `String.trim()`) áp dụng fullName/password; `validatePassword` chặn toàn khoảng trắng; `validateLoginPassword` chỉ blank-check (backend login không có min length); `validateEmail` non-blank + raw length ≤ 254 (= `@Size(max=254)` backend). Test frontend: NBSP vs U+001F, password whitespace-only, email boundary 254. Test Identity `AuthFlowIntegrationTest` (31/0): `" ".repeat(12)` → 400; `"\u00A0Nguyễn Văn A\u00A0"` → 201 lưu nguyên trong DB (Java trim giữ NBSP); `"\u001FA\u001F"` → 400, `"\u001FAB\u001F"` → 201; email 269 ký tự → 400.
 
-- [ ] **T08-14 — F18 + F19 (P3): Xử lý lỗi sau đăng ký và khi `/me` lỗi**
+- [x] **T08-14 — F18 + F19 (P3): Xử lý lỗi sau đăng ký và khi `/me` lỗi**
   - Vị trí: `RegisterPage.tsx:23–29`; `src/web/src/hooks/useMe.ts:16`; `PassengerHome.tsx:16`; `DriverHome.tsx:16`.
   - Sửa: register 201 nhưng login lỗi → báo "Đăng ký thành công, vui lòng đăng nhập" rồi chuyển sang `/login`. `useMe` trả về `error` riêng: chỉ 401 mới chuyển về trang login; lỗi mạng hoặc 5xx hiện nút "Thử lại".
   - Kiểm chứng: test hook với 401, 500 và lỗi mạng.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): F18 — register 201 nhưng login lỗi → `navigate('/login', { state: { notice: 'Đăng ký thành công, vui lòng đăng nhập.' } })`; LoginPage đọc `location.state.notice` và hiện Alert (setError+navigate không hiển thị được vì component unmount). Test jsdom: register 201 + login 401 → LoginPage hiện thông báo. F19 — `useMe` trả `{user, loading, error:'AUTH'|'NETWORK', retry}`; chỉ AUTH (code UNAUTHORIZED) redirect /login; NETWORK/5xx hiện nút "Thử lại" gọi retry. Test jsdom: 200→user; 401→AUTH (+xóa session); 500→NETWORK + retry fetch lại.
 
-- [ ] **T08-15 — N34 (P3): Bỏ qua `expiresIn`, không redirect khi đã đăng nhập, `fetch` không có timeout**
+- [x] **T08-15 — N34 (P3): Bỏ qua `expiresIn`, không redirect khi đã đăng nhập, `fetch` không có timeout**
   - Vị trí: `src/web/src/api/client.ts`, `auth/session.ts`, `pages/LoginPage.tsx`, `App.tsx`.
   - Sửa: lưu `expiresAt` trong session, `loadSession()` trả null khi đã hết hạn; `/login` và `/register` chuyển người đã đăng nhập về trang của role; `fetch` có AbortController timeout (ví dụ 5 s) và báo lỗi rõ ràng. Sửa luôn comment "server echo lại" ở dòng 29 cho đúng sau T07-10.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): `session.ts` lưu `expiresAt`; `saveSession(token,user,expiresInSeconds)`; `loadSession()` trả null VÀ xóa item khi hết hạn (thiếu expiresAt = không hết hạn). `client.ts`: `REQUEST_TIMEOUT_MS=5000`, AbortController+setTimeout abort, catch → ApiError REQUEST_TIMEOUT/NETWORK_ERROR/REQUEST_ABORTED message tiếng Việt; `api.register/login` nhận `signal` tùy chọn (ghép bằng `AbortSignal.any`). `App.tsx`: `RedirectIfAuthed` bọc /login và /register. Test jsdom: expiresAt set/hết hạn+cleanup/backward-compat/clear; timeout fake timers → REQUEST_TIMEOUT; signal pre-aborted → REQUEST_ABORTED; fetch TypeError → NETWORK_ERROR.
 
-- [ ] **T08-16 — F30 (P2): `npm audit` có 8 package lỗi (2 critical, 1 high)**
+- [x] **T08-16 — F30 (P2): `npm audit` có 8 package lỗi (2 critical, 1 high)**
   - Vị trí: `src/web/package.json:15,22,23`; `src/web/package-lock.json`.
   - Sửa: nâng `vite`, `vitest` (kéo theo `tinypool`, `@vitest/mocker`, `vite-node`, `esbuild`) và `react-router-dom` lên bản đã vá. Đọc ghi chú breaking change của Vite và Vitest; chạy lại test và build.
   - Kiểm chứng: `npm audit` không còn critical/high; `npm test` 13/13; `npm run build` thành công.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): nâng `vite@^8.3.5`, `vitest@^5.0.5`, `react-router-dom@^7.18.4`, `@vitejs/plugin-react@^6.1.2` (+ test deps jsdom, @testing-library/react). `npm audit`: 0 vulnerabilities (trước: 8 — 2 critical, 1 high). `tsc --noEmit && vite build` OK; `npm test` 43/43 pass.
 
-- [ ] **T08-17 — Q04 (P3): Frontend chỉ có test cho hàm helper**
+- [x] **T08-17 — Q04 (P3): Frontend chỉ có test cho hàm helper**
   - Sửa: thêm Vitest + Testing Library (môi trường jsdom) cho `client.ts`, `useMe`, `LoginPage`, `RegisterPage`, bao gồm các race của T08-11 và T08-12.
+  - ✅ Đã làm + kiểm chứng (Phase 7, 2026-10-22): test jsdom — `client.test.ts` (correlation UUID header + echo từ error body; race F15; timeout/abort/network), `useMe.test.tsx` (200/401-AUTH/500-NETWORK+retry), `LoginPage.test.tsx` (race F16 hai MemoryRouter độc lập + unmount-abort), `RegisterPage.test.tsx` (F18 notice sau navigate); mở rộng `session.test.ts`, `validation.test.ts`; `test/setup.ts` polyfill matchMedia cho antd. Tổng 43/43 pass.
 
 ---
 

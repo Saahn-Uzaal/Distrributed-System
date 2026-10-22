@@ -56,7 +56,9 @@ Không bao giờ trả stack trace. `details` tùy chọn (object hoặc array).
 | 405 | `METHOD_NOT_ALLOWED` | HTTP method không được hỗ trợ cho endpoint (vd DELETE trên endpoint POST-only) |
 | 413 | `PAYLOAD_TOO_LARGE` | Body > 64 KiB |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | `Content-Type` request không phải `application/json` |
+| 429 | `RATE_LIMITED` | Vượt rate limit ở gateway Nginx (`limit_req`, spec §11) — trả JSON cùng định dạng ApiError (chốt T08-6/T05-11) |
 | 500 | `INTERNAL_ERROR` | Lỗi không mong đợi; log đầy đủ phía server, client chỉ nhận code chung |
+| 502/503/504 | `UPSTREAM_UNAVAILABLE` | Upstream service không khả dụng / timeout ở gateway Nginx (không phải lỗi nghiệp vụ) — trả JSON cùng định dạng ApiError (chốt T08-3) |
 
 ### 1.3. Phân trang (mọi list endpoint)
 
@@ -351,7 +353,7 @@ Sau khi trip COMPLETED: chỉ từ state `CONFIRMED` (khớp tripId) → termina
 ## 5. Correlation ID (chốt)
 
 1. Mọi request public/internal mang `X-Correlation-ID`. Giá trị hợp lệ = UUID; **thiếu hoặc sai định dạng → server tự sinh UUID mới** (không reject request).
-2. Service truyền tiếp header này sang mọi HTTP call ra ngoài (internal calls, Nginx entrypoint tạo nếu client không gửi).
+2. Service truyền tiếp header này sang mọi HTTP call ra ngoài (internal calls, Nginx entrypoint tạo nếu client không gửi). Gateway Nginx giữ UUID hợp lệ do client gửi, nếu không thì sinh từ `$request_id_uuid`; truyền cho backend qua `proxy_set_header X-Correlation-ID` và ghi vào access log. Service canonicalize giá trị (UUID chuẩn hóa — T07-10/N13) và echo lại trong response header + body lỗi.
 3. Outbox event mang `correlationId` của request gốc khởi tạo luồng; consumer log bằng `event.correlationId`. Event hồi phục/replay giữ correlation gốc.
 4. Mọi response lỗi luôn chứa `correlationId`.
 

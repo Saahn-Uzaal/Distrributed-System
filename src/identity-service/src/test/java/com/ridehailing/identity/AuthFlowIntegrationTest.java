@@ -532,6 +532,56 @@ class AuthFlowIntegrationTest {
         assertThat((String) admin.body().get("code")).isEqualTo("INVALID_INPUT");
     }
 
+    /** F17 — password toàn whitespace bị @NotBlank chặn (frontend javaTrim khớp semantics này). */
+    @Test
+    void whitespaceOnlyPasswordRejectedByNotBlank() throws Exception {
+        String email = "ws-" + UUID.randomUUID() + "@example.com";
+        Resp r = post("/api/auth/register", new RegisterBody(email, " ".repeat(12), "Ws User", "PASSENGER"));
+        assertThat(r.status()).isEqualTo(400);
+        assertThat((String) r.body().get("code")).isEqualTo("INVALID_INPUT");
+
+        List<Integer> counts = jdbc.queryForList(
+                "SELECT count(*) FROM users WHERE email = ?", Integer.class, email);
+        assertThat(counts.get(0)).isEqualTo(0);
+    }
+
+    /** F17 — NBSP (U+00A0) KHÔNG bị Java String.trim() bỏ -> fullName đệm NBSP được chấp nhận và lưu nguyên. */
+    @Test
+    void nbspPaddedFullNameAcceptedBecauseJavaTrimKeepsNbsp() throws Exception {
+        String email = "nbsp-" + UUID.randomUUID() + "@example.com";
+        String name = "\u00A0Nguyễn Văn A\u00A0";
+        Resp r = post("/api/auth/register", new RegisterBody(email, PASSWORD, name, "PASSENGER"));
+        assertThat(r.status()).isEqualTo(201);
+        assertThat(((Map<String, Object>) r.body().get("user")).get("fullName")).isEqualTo(name);
+        assertThat(jdbc.queryForObject("SELECT full_name FROM users WHERE email = ?", String.class, email))
+                .isEqualTo(name);
+    }
+
+    /** F17 — U+001F (<= U+0020) bị Java trim() bỏ: "\u001FA\u001F" -> "A" (1 ký tự) bị từ chối. */
+    @Test
+    void controlCharPaddedFullNameTrimmedByJava() throws Exception {
+        String email = "ctrl-" + UUID.randomUUID() + "@example.com";
+        Resp one = post("/api/auth/register", new RegisterBody(email, PASSWORD, "\u001FA\u001F", "PASSENGER"));
+        assertThat(one.status()).isEqualTo(400);
+        assertThat((String) one.body().get("code")).isEqualTo("INVALID_INPUT");
+
+        Resp two = post("/api/auth/register", new RegisterBody(email, PASSWORD, "\u001FAB\u001F", "PASSENGER"));
+        assertThat(two.status()).isEqualTo(201); // sau trim -> "AB" (2 ký tự)
+    }
+
+    /** F17 — email > 254 ký tự bị @Size(max=254) chặn. */
+    @Test
+    void emailLongerThan254Rejected() throws Exception {
+        String longEmail = "user-" + "a".repeat(250) + "@example.com"; // 269 ký tự > 254
+        Resp r = post("/api/auth/register", new RegisterBody(longEmail, PASSWORD, "Long Mail", "PASSENGER"));
+        assertThat(r.status()).isEqualTo(400);
+        assertThat((String) r.body().get("code")).isEqualTo("INVALID_INPUT");
+
+        List<Integer> counts = jdbc.queryForList(
+                "SELECT count(*) FROM users WHERE email = ?", Integer.class, longEmail);
+        assertThat(counts.get(0)).isEqualTo(0);
+    }
+
     private Resp putJson(String path, Object body, String correlationHeader) throws Exception {
         HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(base() + path))
                 .PUT(java.net.http.HttpRequest.BodyPublishers.ofByteArray(

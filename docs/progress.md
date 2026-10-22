@@ -481,3 +481,51 @@ T09-1..6, T10-1..5, T11-1..3, T12-1..5, T12-7 đánh dấu `[x]` kèm bằng ch�
 
 ### Trạng thái FIX_LIST
 T03-1..4, T04-1..3, C05/F25, F26, N14, N16 đánh dấu `[x]` kèm bằng chứng. Còn mở: **Phase 7** (frontend/nginx: F15–F19, N34, T08-3..8/16/17) và **Phase 8** (P3 còn lại: C04/C06, T06-1..4, T07-11..13, T05-7..12 gồm T05-10 — mở khóa T12-6/N28, Q01).
+
+## Lượt 2026-10-22 — FIX_LIST T01–T12: Phase 7 (frontend + nginx)
+
+### Việc đã làm
+- **T08-3 (F22):** `deploy/nginx/nginx.conf` — `error_page 502/503/504 = @json_5xx`: named locations riêng cho từng status (`@json_502/@json_503/@json_504`) trả JSON `UPSTREAM_UNAVAILABLE` kèm `$cid` + header `X-Correlation-ID`; thêm dòng `502/503/504 UPSTREAM_UNAVAILABLE` vào contract §1.2.
+- **T08-4 (F23):** `error_page 413 = @json_payload_too_large` — JSON động với `$cid` trong body + header; xóa file tĩnh `src/web/public/errors/payload-too-large.json`; README cập nhật mô tả 413.
+- **T08-5 (F24):** `location = /api` + `location /api/` → 404 JSON `NOT_FOUND` trước SPA fallback.
+- **T08-6 (N06):** `limit_req_status 429;` + `error_page 429 = @json_rate_limited` → JSON `RATE_LIMITED`.
+- **T08-7 (N05):** `server_tokens off;`.
+- **T08-8 (N12 phần nginx):** `map $http_x_correlation_id $cid { "~^[0-9a-fA-F]{8}-...{12}$" $http_x_correlation_id; default $gen_cid; }` + `proxy_set_header X-Correlation-ID $cid;` ở cả 8 proxy locations + `$cid` trong `log_format main`. **Deviation ghi nhận:** image pin `nginx:1.27.5-alpine` KHÔNG có module request_id (`$request_id_uuid` không tồn tại — `nginx -t` báo unknown variable) nên `$gen_cid` sinh bằng chuỗi 5 `map` thuần config (msec+connection+request_length-remote_port → nhân đôi ≥32 chữ số → cắt 32 → format 8-4-4-4-12; chữ số thập phân hợp lệ hex → backend `CorrelationIdFilter` parse được).
+- **T05-11:** thêm dòng `429 RATE_LIMITED` vào contract §1.2 (cài đặt nginx ở T08-6).
+- **F15 (T08-11):** `api/client.ts` giữ `sentToken`; chỉ `clearSession()` khi token đang lưu === token đã gửi.
+- **F16 (T08-12):** mới `auth/generation.ts` — bump tại submit login/register + logout; continuation chỉ khi generation khớp và mounted; AbortController abort khi unmount.
+- **F17 (T08-13):** `javaTrim()` (codePoints ≤ U+0020, đúng Java `String.trim()`) trong `validation.ts`; password chặn toàn khoảng trắng; login password chỉ blank-check (backend không có min length); email raw ≤ 254 (= `@Size(max=254)`); fullName dùng javaTrim.
+- **F18+F19 (T08-14):** register 201 + login lỗi → `navigate('/login', { state: { notice } })`, LoginPage hiện Alert từ `location.state.notice`; `useMe` trả `{user, loading, error:'AUTH'|'NETWORK', retry}` — chỉ AUTH redirect /login, NETWORK/5xx nút "Thử lại".
+- **N34 (T08-15):** session lưu `expiresAt`, `loadSession()` null + xóa item khi hết hạn; fetch timeout 5 s (AbortController) → REQUEST_TIMEOUT/NETWORK_ERROR/REQUEST_ABORTED message tiếng Việt; `signal` tùy chọn cho register/login (`AbortSignal.any`); `RedirectIfAuthed` bọc /login và /register.
+- **F30 (T08-16):** nâng vite/vitest/react-router-dom/plugin-react (+ jsdom, @testing-library/react) — `npm audit` 0 vulnerabilities.
+- **Q04 (T08-17):** test jsdom cho client/useMe/LoginPage/RegisterPage + mở rộng session/validation tests; `test/setup.ts` polyfill matchMedia.
+
+### Kiểm chứng thật qua :8080 (backend Java không chạy)
+| Probe | Kết quả |
+|---|---|
+| `/api/drivers` không header | 502 JSON UPSTREAM_UNAVAILABLE, cid sinh trong body + header `X-Correlation-ID`; access log (`docker logs`) ghi `cid=` trùng |
+| `/api/drivers` kèm UUID | body/header/log giữ đúng UUID đã gửi |
+| `/api/does-not-exist`, `/api/driversfoo` | 404 JSON NOT_FOUND với cid |
+| POST login body 70 043 byte + UUID | 413 JSON PAYLOAD_TOO_LARGE, correlationId = UUID đã gửi (header trùng) |
+| Burst 8 req `/api/auth/login` (5r/s burst=5) | 7×502 + 1×429; body 429 = RATE_LIMITED JSON cùng cid |
+| Header `Server:` | `nginx` không kèm phiên bản |
+| Echo server Node :8082 (tạm, kill sau) | nhận đúng X-Correlation-ID đã gửi và cả ID nginx sinh — chứng minh proxy_set_header tới upstream |
+
+Ghi chú: access.log trong image là symlink `/dev/stdout` (ghi sẵn ở docs/tasks/T08.md) → đọc bằng `docker logs ridehailing-nginx`, không `docker exec tail`.
+
+### Tests và build
+| Lệnh | Kết quả |
+|---|---|
+| `npm test` (src/web, node v24.18.0) | **43/43 pass** (7 files: client, useMe, LoginPage, RegisterPage, session, validation, uuid) |
+| `tsc --noEmit && npm run build` | OK (chỉ warning chunk >500 kB) |
+| `npm audit` | 0 vulnerabilities |
+| `./mvnw -B clean verify` (root, JDK 21) | **BUILD SUCCESS** — identity **31**, driver **98**, trip **55**, matching **8**, payment **8** = **200 tests / 0 failures/errors/skipped** |
+
+### Ghi chú kỹ thuật
+- Nginx: `return` không hỗ trợ nối chuỗi `'a' . $var . 'b'` — phải một chuỗi quote duy nhất với `$cid` nội suy; `add_header` mặc định chỉ áp dụng 2xx/30x → mọi dòng `add_header X-Correlation-ID $cid` cần `always`.
+- Vitest/jsdom: `sessionStorage` undefined ở node env → `// @vitest-environment jsdom`; antd cần polyfill `window.matchMedia`; RTL auto-cleanup không chạy giữa các test trong vitest → gọi `cleanup()` explicit trong afterEach + query scoped theo container.
+- Race test F16 dùng **hai MemoryRouter độc lập** — router chung sẽ unmount instance A khi B navigate, abort fetch của A và làm assertion generation-guard không đạt được.
+- F18 dùng `location.state.notice` thay vì setError+navigate (alert không hiển thị sau unmount).
+
+### Trạng thái FIX_LIST
+T08-3..8, T08-11..17, T05-11 đánh dấu `[x]` kèm bằng chứng. Còn mở: **Phase 8** (P3 còn lại: C04/C06, T06-1..4, T07-11..13, T05-7..12 gồm T05-10 — mở khóa T12-6/N28, Q01).

@@ -33,6 +33,9 @@ export class ApiError extends Error {
   }
 }
 
+/** N34 — timeout mặc định cho mọi API call (AbortController). */
+export const REQUEST_TIMEOUT_MS = 5000
+
 export interface RegisterBody {
   email: string
   password: string
@@ -40,13 +43,23 @@ export interface RegisterBody {
   role: Role
 }
 
-async function request<T>(
-  path: string,
-  options: { method?: string; body?: unknown; authenticated?: boolean } = {}
-): Promise<T> {
+interface RequestOptions {
+  method?: string
+  body?: unknown
+  authenticated?: boolean
+  /** N34 — timeout riêng cho call này (test); mặc định REQUEST_TIMEOUT_MS. */
+  timeoutMs?: number
+  /** F16 — signal để hủy request khi component unmount. */
+  signal?: AbortSignal
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const session = loadSession()
+  // F15: ghi lại token ĐÃ GỬI đi; chỉ xóa session nếu token đang lưu vẫn là token đó.
+  const sentToken = session?.token ?? null
   const headers: Record<string, string> = {
-    // contract §5: client sinh UUID correlation ID, server echo lại trong response/error
+    // contract §5: client sinh UUID correlation ID; service canonicalize và echo lại
+    // trong response header X-Correlation-ID + body lỗi (T07-10/N13).
     'X-Correlation-ID': newUuid()
   }
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
@@ -55,11 +68,35 @@ async function request<T>(
     headers['Authorization'] = `Bearer ${session.token}`
   }
 
-  const resp = await fetch(path, {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
-  })
+  const controller = new AbortController()
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // N34: timeout luôn áp dụng; nếu caller truyền signal (unmount) thì kết hợp cả hai.
+  let signal: AbortSignal | undefined = options.signal ?? controller.signal
+  if (options.signal && typeof AbortSignal !== 'undefined') {
+    const anyFn = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+    if (typeof anyFn === 'function') signal = anyFn.call(AbortSignal, [controller.signal, options.signal])
+  }
+  let resp: Response
+  try {
+    resp = await fetch(path, {
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal
+    })
+  } catch (e) {
+    // N34: báo lỗi rõ ràng cho hủy/timeout/lỗi mạng — không ném TypeError trần.
+    if (options.signal?.aborted) {
+      throw new ApiError('REQUEST_ABORTED', 'Yêu cầu đã bị hủy.')
+    }
+    if (controller.signal.aborted) {
+      throw new ApiError('REQUEST_TIMEOUT', `Yêu cầu quá thời hạn sau ${Math.round(timeoutMs / 1000)} giây.`)
+    }
+    throw new ApiError('NETWORK_ERROR', 'Không thể kết nối máy chủ. Kiểm tra mạng và thử lại.')
+  } finally {
+    clearTimeout(timer)
+  }
 
   const text = await resp.text()
   let data: unknown = null
@@ -72,10 +109,11 @@ async function request<T>(
   }
 
   if (!resp.ok) {
-    // R03 fix: server từ chối phiên (401) -> xóa session local ngay để UI không tiếp tục
-    // hiển thị "đăng nhập thành công" từ cache cũ; phân biệt với lỗi mạng/server khác.
-    if (resp.status === 401 && options.authenticated !== false && session) {
-      clearSession()
+    // R03 + F15 fix: server từ chối phiên (401) -> xóa session local CHỈ nếu token đang lưu
+    // vẫn là token đã gửi đi — request cũ hoàn tất muộn không được xóa phiên mới.
+    if (resp.status === 401 && options.authenticated !== false && sentToken) {
+      const current = loadSession()
+      if (current?.token === sentToken) clearSession()
     }
     const err = (data ?? {}) as { code?: string; message?: string; correlationId?: string }
     throw new ApiError(err.code ?? 'UNKNOWN', err.message ?? `HTTP ${resp.status}`, err.correlationId)
@@ -85,11 +123,11 @@ async function request<T>(
 }
 
 export const api = {
-  register(body: RegisterBody): Promise<{ user: SessionUser }> {
-    return request('/api/auth/register', { method: 'POST', body, authenticated: false })
+  register(body: RegisterBody, signal?: AbortSignal): Promise<{ user: SessionUser }> {
+    return request('/api/auth/register', { method: 'POST', body, authenticated: false, signal })
   },
-  login(email: string, password: string): Promise<{ accessToken: string; expiresIn: number; user: SessionUser }> {
-    return request('/api/auth/login', { method: 'POST', body: { email, password }, authenticated: false })
+  login(email: string, password: string, signal?: AbortSignal): Promise<{ accessToken: string; expiresIn: number; user: SessionUser }> {
+    return request('/api/auth/login', { method: 'POST', body: { email, password }, authenticated: false, signal })
   },
   me(): Promise<SessionUser> {
     return request('/api/auth/me')

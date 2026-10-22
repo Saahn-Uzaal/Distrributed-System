@@ -15,12 +15,33 @@ function Guarded({ role, children }: { role: Role; children: ReactElement }): Re
   return children
 }
 
+/** N34: người đã đăng nhập (session chưa hết hạn) không ở lại /login hay /register. */
+function RedirectIfAuthed({ children }: { children: ReactElement }): ReactElement {
+  const session = loadSession()
+  if (session) return <Navigate to={routeForRole(session.user.role)} replace />
+  return children
+}
+
 export default function App(): ReactElement {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/login" replace />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/login"
+        element={
+          <RedirectIfAuthed>
+            <LoginPage />
+          </RedirectIfAuthed>
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          <RedirectIfAuthed>
+            <RegisterPage />
+          </RedirectIfAuthed>
+        }
+      />
       <Route
         path="/passenger"
         element={

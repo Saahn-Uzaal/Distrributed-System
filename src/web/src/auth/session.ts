@@ -14,12 +14,22 @@ export interface SessionUser {
 interface StoredSession {
   token: string
   user: SessionUser
+  /** N34 — thời điểm (epoch ms) token hết hạn; loadSession() trả null khi đã quá. */
+  expiresAt: number
 }
 
 const STORAGE_KEY = 'ridehailing.session'
 
-export function saveSession(token: string, user: SessionUser): void {
-  const value: StoredSession = { token, user }
+/**
+ * Lưu session kèm thời điểm hết hạn tính từ `expiresInSeconds` của response login
+ * (contract §3.1: expiresIn = giây tới exp của JWT).
+ */
+export function saveSession(token: string, user: SessionUser, expiresInSeconds: number): void {
+  const value: StoredSession = {
+    token,
+    user,
+    expiresAt: Date.now() + Math.max(0, expiresInSeconds) * 1000
+  }
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value))
 }
 
@@ -30,7 +40,13 @@ export function loadSession(): StoredSession | null {
     const parsed = JSON.parse(raw) as Partial<StoredSession>
     if (typeof parsed.token !== 'string' || !parsed.user) return null
     if (parsed.user.role !== 'PASSENGER' && parsed.user.role !== 'DRIVER') return null
-    return { token: parsed.token, user: parsed.user }
+    // N34: session đã hết hạn -> coi như không có phiên (server sẽ trả 401 cho mọi call).
+    const expiresAt = typeof parsed.expiresAt === 'number' ? parsed.expiresAt : Number.MAX_SAFE_INTEGER
+    if (expiresAt <= Date.now()) {
+      sessionStorage.removeItem(STORAGE_KEY)
+      return null
+    }
+    return { token: parsed.token, user: parsed.user, expiresAt }
   } catch {
     return null
   }

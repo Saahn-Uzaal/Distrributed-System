@@ -1,6 +1,0 @@
-{
-  "code": "PAYLOAD_TOO_LARGE",
-  "message": "Request body exceeds the 64 KiB limit.",
-  "correlationId": null,
-  "details": null
-}

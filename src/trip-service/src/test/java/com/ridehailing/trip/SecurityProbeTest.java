@@ -45,6 +45,10 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "spring.datasource.url=jdbc:h2:mem:trip_probe;DB_CLOSE_DELAY=-1",
                 // N09: main yml không còn dev default password — H2 probe set giá trị dummy.
                 "spring.datasource.password=probe_dummy_password",
+                // T13: mật khẩu RabbitMQ không có default — probe không kết nối broker (connection lazy).
+                "spring.rabbitmq.password=probe_dummy_password",
+                // T16: token internal API driver-service (N09) — validator fail-fast cần property này.
+                "app.trip.internal-api-token=probe_dummy_token",
                 "app.flyway.enabled=false"
         })
 class SecurityProbeTest {

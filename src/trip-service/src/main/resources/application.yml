@@ -6,6 +6,15 @@ server:
 spring:
   application:
     name: trip-service
+  # T13 — RabbitMQ (events.md §1/§4.6): outbox worker publish persistent + confirms.
+  # Connection factory lazy — broker down lúc khởi động KHÔNG chặn app (T13 acceptance:
+  # "broker down vẫn giữ pending; broker lại lên phát được").
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_AMQP_PORT:5672}
+    username: ${RABBITMQ_USER:ridehailing_dev}
+    # N09: không có giá trị mặc định cho mật khẩu — thiếu env thì RequiredDbPasswordValidator dừng startup.
+    password: ${RABBITMQ_PASSWORD:}
   datasource:
     url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/trip_db
     username: trip_svc
@@ -29,11 +38,50 @@ fare:
   base-vnd: ${FARE_BASE_VND:12000}
   per-km-vnd: ${FARE_PER_KM_VND:5000}
 
+# T13 — outbox publish worker (events.md §4.6): quét PENDING, publish + chờ confirm rồi đánh dấu SENT;
+# returned/lỗi transient -> giữ PENDING + last_error + backoff next_attempt_at.
+app:
+  outbox:
+    enabled: true
+    publish-interval-ms: 1000
+    batch-size: 10
+    confirm-timeout-ms: 5000
+  # T16 — inbox consumer (events.md §4): dedup + retry bounded khi transient fail.
+  inbox:
+    consumer-name: trip-service
+    max-retries: 3
+    # Backoff mặc định production 1s/3s/10s; test đặt giá trị ngắn hơn qua property trực tiếp.
+    retry-backoff-ms: ${TRIP_INBOX_RETRY_BACKOFF_MS:1000,3000,10000}
+  # T21 — saga recovery worker (state-machines.md §2 "Quy tắc worker"): quét saga chưa terminal có
+  # next_retry_at đến hạn, claim bằng transaction ngắn (CAS version + lease_owner), thực thi intent
+  # pending ngoài khóa DB. Lease re-arm khi claim: worker chết giữa chừng → replay idempotent sau hết hạn.
+  saga:
+    enabled: true
+    worker-interval-ms: ${SAGA_WORKER_INTERVAL_MS:1000}
+    lease-ms: ${SAGA_LEASE_MS:5000}
+    batch-size: 5
+  # T16 — internal API driver-service (api-contracts.md §4.2/§7-8) + matching policy
+  # (events.md §3.2/§3.3, api-contracts.md §6).
+  trip:
+    driver-service-url: ${DRIVER_SERVICE_URL:http://localhost:8082}
+    # N09: KHÔNG có dev default — thiếu env thì RequiredDbPasswordValidator dừng startup.
+    internal-api-token: ${INTERNAL_API_TOKEN}
+    http-timeout-ms: ${TRIP_HTTP_TIMEOUT_MS:3000}
+    offer-ttl-seconds: ${OFFER_TTL_SECONDS:30}
+    max-matching-attempts: ${MAX_MATCHING_ATTEMPTS:3}
+    matching-retry-delay-ms: ${MATCHING_RETRY_DELAY_MS:5000}
+    trip-match-deadline-seconds: ${TRIP_MATCH_DEADLINE_SECONDS:120}
+
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  health:
+    rabbit:
+      # T13: broker KHÔNG nằm trong /actuator/health — readiness chỉ phản ánh DB (N17/C06);
+      # broker down không được làm service DOWN (T13 acceptance: app vẫn chạy + giữ pending).
+      enabled: false
   endpoint:
     health:
       probes:

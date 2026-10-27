@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import com.ridehailing.trip.repo.IdempotencyKeyRepository;
 import com.ridehailing.trip.repo.OutboxRepository;
+import com.ridehailing.trip.repo.SagaRepository;
 import com.ridehailing.trip.repo.TripEventRepository;
 import com.ridehailing.trip.repo.TripRepository;
 import com.ridehailing.trip.security.AuthenticatedUser;
@@ -97,6 +98,15 @@ class TripIntegrationTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         // Bean JwtVerifier vẫn khởi tạo dù test không verify token thật — dùng public key test.
         registry.add("jwt.public-key-path", () -> PUBLIC_KEY_PATH);
+        // T13: tắt outbox publish worker trong test T12 (không có broker) — giữ hermetic,
+        // row PENDING vẫn tồn tại cho các assertion T12. Publish thật được test ở
+        // OutboxPublishIntegrationTest.
+        registry.add("app.outbox.enabled", () -> "false");
+        // N09/T13: mật khẩu RabbitMQ không có default — test này không kết nối broker.
+        registry.add("spring.rabbitmq.password", () -> "no_broker_in_this_test");
+        // T16: token internal API driver-service (N09) — context đầy đủ cần property này
+        // dù test không gọi HTTP driver-service.
+        registry.add("app.trip.internal-api-token", () -> "test_internal_token_2026");
     }
 
     @Autowired
@@ -722,13 +732,15 @@ class TripIntegrationTest {
                     key, hash, originalResponse);
             var upgraded = Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load();
             upgraded.migrate();
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("5"); // L06: V5 outbox schema_version INT
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("7"); // T21: V7 saga worker lease (lease_owner)
             assertThat(legacy.queryForObject("SELECT principal_id FROM idempotency_keys WHERE key = ?", UUID.class, key))
                     .isEqualTo(passenger);
             assertThat(legacy.queryForObject("SELECT operation FROM idempotency_keys WHERE key = ?", String.class, key))
                     .isEqualTo("CREATE_TRIP");
+            // T16: constructor thêm SagaRepository + trip-match-deadline-seconds (sagas table có mặt sau V6).
             var service = new TripService(new TripRepository(legacy), new OutboxRepository(legacy),
-                    new TripEventRepository(legacy), new IdempotencyKeyRepository(legacy, JSON), JSON, 12000, 5000);
+                    new SagaRepository(legacy), new TripEventRepository(legacy),
+                    new IdempotencyKeyRepository(legacy, JSON), JSON, 12000, 5000, 120);
             var replay = service.create(new AuthenticatedUser(passenger, "legacy@example.com", Role.PASSENGER),
                     key.toString(), new QuoteRequest(new QuoteRequest.Point(10.7769, 106.7009),
                             new QuoteRequest.Point(10.8, 106.72)), UUID.randomUUID());

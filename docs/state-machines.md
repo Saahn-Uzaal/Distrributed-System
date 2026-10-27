@@ -34,10 +34,10 @@ States: `SEARCHING`, `DRIVER_OFFERED`, `CANCELLING` *(transient)*, `ACCEPTED`, `
 | `DRIVER_OFFERED` | `SEARCHING` | Reject hoặc offer TTL hết hạn → release **xác nhận** (hoặc đọc được terminal), attempt < 3 | Saga `WAITING_MATCH` attempt+1, excludedDriverIds += driver; xóa `trips.driver_id`/`driver_user_id` về NULL (chốt N22); trip_event `OFFER_REJECTED`/`OFFER_EXPIRED` + `RESERVATION_RELEASED`; outbox `TripRequested` attempt mới. Phase chỉ chuyển sang `RESERVING_DRIVER` **sau khi** nhận `DriverProposed` đúng attempt (chốt F06); event attempt cũ bị bỏ qua theo events.md §4.4 |
 | `SEARCHING` | `SEARCHING` | Consume `NoDriverFound` đúng attempt, hoặc `DriverProposed` mà hết danh sách candidate chưa giữ được chỗ — attempt < 3 và chưa quá deadline | Saga `WAITING_MATCH`: attempt+1, `next_retry_at = now + MATCHING_RETRY_DELAY_MS` (env, default 5000 ms); outbox `TripRequested` attempt mới; **excludedDriverIds giữ nguyên** với NoDriverFound (không có candidate bị loại); không ghi trip_event mới (state không đổi). Hết attempts hoặc quá deadline → `NO_DRIVER` theo row kế tiếp |
 | `DRIVER_OFFERED` / `SEARCHING` | `NO_DRIVER` | Hết 3 attempts hoặc deadline 120s (worker Saga) — **chỉ khi không còn reservation hiệu lực/đang xử lý** | Nếu còn reservation pending/hoạt động: Saga phase `COMPENSATING`, intent `RELEASE_RESERVATION` reconcile trước, rồi mới chuyển `NO_DRIVER`; trip_event `RESERVATION_RELEASED` + `NO_DRIVER`; notification passenger; Saga ABORTED (chốt F06) |
-| `SEARCHING` | `CANCELLED` | Cancel, không có reservation pending | Saga ABORTED; trip_event `TRIP_CANCELLED`. **Không publish event "hủy matching"** (không tồn tại trong catalog — chốt F31): event `DriverProposed`/`NoDriverFound` attempt cũ tới sau đó bị bỏ qua — ACK + log theo events.md §4.4 |
+| `SEARCHING` | `CANCELLED` | Cancel, không có reservation pending | Saga ABORTED; trip_event `TRIP_CANCELLED`. **Không publish event "hủy matching"** (không tồn tại trong catalog — chốt F31): event `DriverProposed`/`NoDriverFound` attempt cũ tới sau đó bị bỏ qua — ACK + log theo events.md §4.4 **Chốt T20:** thực tế đi qua `CANCELLING` ngắn: trip release (tombstone) mọi reservationId tất định của attempt hiện tại để chặn reserve đang bay của listener T16, rồi mới `CANCELLED` (xem api-contracts §3.3). |
 | `DRIVER_OFFERED` (hoặc đang RESERVING) | `CANCELLING` | Cancel khi có reservation pending/hoạt động | Saga `COMPENSATING`, intent `RELEASE_RESERVATION`; HTTP 202; trip_event `CANCELLING` |
 | `CANCELLING` | `CANCELLED` | Release xác nhận / không còn reserve pending (reconcile) | Driver giải phóng nếu đang RESERVED; trip_event `TRIP_CANCELLED`; notification passenger; Saga ABORTED |
-| `DRIVER_OFFERED` | `ACCEPTED` | Accept bởi offered driver đúng attempt + confirm thành công (driver BUSY) | Saga tiếp tục chờ finish; trip_event `TRIP_ACCEPTED`; notifications cả hai bên |
+| `DRIVER_OFFERED` | `ACCEPTED` | Accept bởi offered driver đúng attempt + confirm thành công (driver BUSY) | Saga tiếp tục chờ finish; trip_event `TRIP_ACCEPTED`; notifications cả hai bên **Chốt T18:** saga `CONFIRMING` → `AWAITING_FINISH` (desired `NONE`) ngay khi ACCEPTED; T22 đặt `FINISH_ASSIGNMENT` khi complete. |
 | `ACCEPTED` | `IN_PROGRESS` | Start bởi assigned driver | trip_event `TRIP_STARTED` |
 | `IN_PROGRESS` | `COMPLETED` | Complete bởi assigned driver | Outbox `TripCompleted` (paymentAttempt = trips.payment_attempt, khởi tạo 1); Saga phase `AWAITING_FINISH`, intent `FINISH_ASSIGNMENT`; trip_event `TRIP_COMPLETED`; notification passenger |
 
@@ -50,7 +50,7 @@ Chốt bổ sung:
 
 ## 2. Saga orchestrator (trip-service — orchestrator duy nhất)
 
-Cột chốt thêm: `context JSONB` (lưu candidates, index candidate hiện tại, reservationId), `lease_owner` nullable (claim worker). Schema đầy đủ:
+Cột chốt thêm: `context JSONB` (lưu candidates, index candidate hiện tại, reservationId; **T21:** + `offerExpiresAt` — worker dùng để kiểm tra offer TTL của WAITING_DRIVER), `lease_owner` nullable (claim worker; T21 re-arm `next_retry_at = now + lease` khi claim). Schema đầy đủ:
 `sagas(id, trip_id unique, phase, desired_action, next_retry_at, retry_count, deadline_at, last_error, context jsonb default '{}', version int default 0, created_at, updated_at)`.
 
 ### Phase & intent
@@ -61,14 +61,15 @@ Cột chốt thêm: `context JSONB` (lưu candidates, index candidate hiện t�
 | `RESERVING_DRIVER` | Đang thử reserve candidate theo thứ tự | `RESERVE_NEXT_CANDIDATE`, `GET_RESERVATION_STATUS` (sau timeout HTTP) |
 | `WAITING_DRIVER` | Chờ accept/reject; giám sát offer TTL 30s | `RELEASE_RESERVATION` (khi expire/cancel), `NONE` |
 | `CONFIRMING` | Intent ACCEPT đã thắng, đang confirm idempotent | `CONFIRM_ASSIGNMENT`, `GET_RESERVATION_STATUS` |
-| `COMPENSATING` | Intent CANCEL/REJECT thắng, đang bù trừ | `RELEASE_RESERVATION`, `GET_RESERVATION_STATUS` |
-| `AWAITING_FINISH` | Trip COMPLETED, chờ finish assignment idempotent | `FINISH_ASSIGNMENT` |
+| `COMPENSATING` | Intent CANCEL/REJECT/OFFER_EXPIRED/MATCH_DEADLINE đã lưu, đang bù trừ | `RELEASE_RESERVATION`, `GET_RESERVATION_STATUS` |
+| `AWAITING_FINISH` | Assignment hiệu lực (từ ACCEPTED — chốt T18); khi Trip COMPLETED chờ finish assignment idempotent | `NONE` (ACCEPTED/IN_PROGRESS), `FINISH_ASSIGNMENT` (sau complete) |
 | `COMPLETED` ⊘ | Terminal — driver đã release sau chuyến | – |
 | `ABORTED` ⊘ | Terminal — trip CANCELLED/NO_DRIVER, không còn việc | – |
 
 Quy tắc worker (chốt):
-- Worker quét saga chưa terminal có `next_retry_at` ≤ now; **claim bằng transaction ngắn**: CAS `version` + ghi `lease_owner`; hai worker/request handler không chạy trùng intent.
+- Worker quét saga chưa terminal có `next_retry_at IS NULL hoặc ≤ now` (đồng hồ DB); **claim bằng transaction ngắn**: CAS `version` + ghi `lease_owner` + re-arm `next_retry_at = now + lease`; hai worker/request handler không chạy trùng intent. Điều kiện due không yêu cầu `lease_owner IS NULL` — lease cũ của worker chết hết hạn và saga được claim lại (T21).
 - Không giữ DB lock khi gọi HTTP: lưu intent trước, gọi internal API, sau đó reconcile theo kết quả/timeout (GET reservation status).
+- **Sửa review T21 (27/10/2026):** timeout offer kiểm tra lại `offerExpiresAt` của offer hiện tại dưới khóa saga, lưu `context.intent=OFFER_EXPIRED` trước release. Deadline tìm driver lưu `context.intent=MATCH_DEADLINE` + `deadlineTargets` trước HTTP; worker chỉ chuyển NO_DRIVER khi mọi reservation đích đã terminal. Proposal tới sau deadline được ACK và giữ việc cleanup trong saga cho worker, không tự đánh ABORTED. Restart tiếp tục cả hai intent qua COMPENSATING.
 - Tranh chấp accept vs cancel: transaction khóa/version-check saga quyết định **một** intent thắng; intent thua trả 409 cho client; worker thực thi intent đã lưu.
 - **Mọi `reservationId` đã cấp mà trip bỏ phải được release** (chốt N24): cancel, reject hết candidate, NO_DRIVER hoặc reconcile timeout — Trip gửi `release` (tạo tombstone nếu release tới trước) và chỉ coi cleanup xong khi có xác nhận terminal; không tái dùng `commandId` cho thao tác khác; command lỗi (4xx/5xx/timeout) **không được lưu** để replay.
 
@@ -122,6 +123,8 @@ NOT_REQUESTED ──consume TripCompleted (attempt n)──► PENDING ──┬
 ```
 
 - **MVP: `FAILED` là terminal — không có cơ chế retry payment chủ động** (spec §15 bỏ tính năng retry payment chủ động cho solo scope). Lỗi kỹ thuật trong cùng attempt được retry in-process bởi payment-service theo spec §10; việc Trip cấp attempt mới sau FAILED nằm ngoài MVP.
+- **Chốt T23 (2026-10-27):** bảng `payments` không có row trung gian PENDING — handler ghi status cuối (`SUCCEEDED`/`FAILED`) nguyên tử trong cùng transaction với outbox PENDING; trạng thái `PENDING` ở sơ đồ trên là của `trips.payment_status`, giữ đến khi trip-service nhận PaymentSucceeded/PaymentFailed (T24).
+- **Chốt T24 (2026-10-27):** trip-service consume PaymentSucceeded/PaymentFailed đúng attempt (`state COMPLETED` + `payment_attempt == attempt` + `payment_status PENDING`) → CAS `PENDING → SUCCEEDED/FAILED`, `trips.version+1`, trip_event `PAYMENT_*` tại version mới; event stale/duplicate → log + skip ACK (không DLQ, §4.4).
 - Cột `trips.payment_attempt` và unique `(trip_id, attempt)` trong `payments` giữ làm schema dự phòng: nếu mở rộng retry chủ động sau này, mỗi attempt là record mới, không sửa lịch sử attempt cũ.
 - Không có hai payment attempts hoạt động đồng thời cho một trip.
 - Trip state độc lập: COMPLETED giữ nguyên dù payment FAILED (invariant 7).

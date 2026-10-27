@@ -41,6 +41,8 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/**").permitAll()
                 // POST quote/create: chỉ passenger (contract §3.3)
                 .requestMatchers(HttpMethod.POST, "/api/trips", "/api/trips/quote").hasRole("PASSENGER")
+                // T20: cancel chỉ passenger (owner kiểm tra ở service; người khác → 404)
+                .requestMatchers(HttpMethod.POST, "/api/trips/*/cancel").hasRole("PASSENGER")
                 // POST accept/reject/start/complete: chỉ driver (contract §3.3)
                 .requestMatchers(HttpMethod.POST,
                         "/api/trips/*/accept", "/api/trips/*/reject",

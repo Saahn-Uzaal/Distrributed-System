@@ -5,34 +5,52 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
- * N09 — fail fast khi thiếu env password DB: dừng startup với thông báo nêu tên biến,
+ * N09 — fail fast khi thiếu env mật khẩu: dừng startup với thông báo nêu tên biến,
  * không in giá trị. Chạy ở BeanFactoryPostProcessor (sau khi mọi property source đã có mặt,
- * trước khi bean DataSource được tạo) nên test set spring.datasource.password trực tiếp
+ * trước khi bean DataSource/ConnectionFactory được tạo) nên test set property trực tiếp
  * (H2 probe / Testcontainers) không bị chặn.
+ * T14: thêm RABBITMQ_PASSWORD (inbox consumer) — cùng quy tắc, không có giá trị mặc định.
  */
 @Component
 public final class RequiredDbPasswordValidator implements BeanFactoryPostProcessor {
 
-    private static final String ENV_VAR = "MATCHING_DB_PASSWORD";
+    /** env var -> property tương ứng trong application.yml. */
+    private static final Map<String, String> REQUIRED = new LinkedHashMap<>();
+
+    static {
+        REQUIRED.put("MATCHING_DB_PASSWORD", "spring.datasource.password");
+        REQUIRED.put("RABBITMQ_PASSWORD", "spring.rabbitmq.password");
+        // T15: token internal API driver-service (contract §7-8) — không có giá trị mặc định.
+        REQUIRED.put("INTERNAL_API_TOKEN", "app.matching.internal-api-token");
+    }
 
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
         Environment environment = beanFactory.getBean(Environment.class);
-        String envValue = System.getenv(ENV_VAR);
+        for (Map.Entry<String, String> entry : REQUIRED.entrySet()) {
+            requireSet(environment, entry.getKey(), entry.getValue());
+        }
+    }
+
+    private static void requireSet(Environment environment, String envVar, String property) {
+        String envValue = System.getenv(envVar);
         if (envValue != null && !envValue.isBlank()) {
             return;
         }
         try {
-            String resolved = environment.getProperty("spring.datasource.password");
+            String resolved = environment.getProperty(property);
             if (resolved != null && !resolved.isBlank() && !resolved.contains("${")) {
-                return; // test set password trực tiếp (H2 probe / Testcontainers)
+                return; // test set property trực tiếp (H2 probe / Testcontainers)
             }
         } catch (RuntimeException ignored) {
             // placeholder chưa resolve được — coi như thiếu env
         }
         throw new IllegalStateException(
-                "Missing required environment variable '" + ENV_VAR + "'. Set it before starting this service"
+                "Missing required environment variable '" + envVar + "'. Set it before starting this service"
                         + " (see README, section 'Nạp env khi chạy jar').");
     }
 }

@@ -7,6 +7,7 @@ import com.ridehailing.trip.exception.TripNotFoundException;
 import com.ridehailing.trip.geo.Haversine;
 import com.ridehailing.trip.repo.IdempotencyKeyRepository;
 import com.ridehailing.trip.repo.OutboxRepository;
+import com.ridehailing.trip.repo.SagaRepository;
 import com.ridehailing.trip.repo.TripEventRepository;
 import com.ridehailing.trip.repo.TripRepository;
 import com.ridehailing.trip.security.AuthenticatedUser;
@@ -41,7 +42,8 @@ import java.util.UUID;
  * - Idempotency POST /api/trips: header UUID bắt buộc; claim key bằng ON CONFLICT DO NOTHING trong transaction;
  *   cùng key + cùng payload -> replay response gốc đã lưu (202); cùng key + payload khác -> 409 IDEMPOTENCY_MISMATCH.
  * - Side effects tạo trip (cùng transaction): outbox PENDING TripRequested attempt 1 (publisher worker = T13),
- *   trip_event TRIP_CREATED version 1. Saga WAITING_MATCH = T16, notification passenger = T25 — chưa ghi ở đây.
+ *   trip_event TRIP_CREATED version 1; saga WAITING_MATCH deadline = createdAt + TRIP_MATCH_DEADLINE_SECONDS
+ *   (T16, state-machines.md §1/§2). Notification passenger = T25 — chưa ghi ở đây.
  */
 @Service
 public class TripService {
@@ -57,23 +59,28 @@ public class TripService {
 
     private final TripRepository tripRepo;
     private final OutboxRepository outboxRepo;
+    private final SagaRepository sagaRepo;
     private final TripEventRepository eventRepo;
     private final IdempotencyKeyRepository idempotencyRepo;
     private final ObjectMapper json;
     private final long fareBaseVnd;
     private final long farePerKmVnd;
+    private final long tripMatchDeadlineSeconds;
 
-    public TripService(TripRepository tripRepo, OutboxRepository outboxRepo, TripEventRepository eventRepo,
-                       IdempotencyKeyRepository idempotencyRepo, ObjectMapper json,
+    public TripService(TripRepository tripRepo, OutboxRepository outboxRepo, SagaRepository sagaRepo,
+                       TripEventRepository eventRepo, IdempotencyKeyRepository idempotencyRepo, ObjectMapper json,
                        @Value("${fare.base-vnd:12000}") long fareBaseVnd,
-                       @Value("${fare.per-km-vnd:5000}") long farePerKmVnd) {
+                       @Value("${fare.per-km-vnd:5000}") long farePerKmVnd,
+                       @Value("${app.trip.trip-match-deadline-seconds:120}") long tripMatchDeadlineSeconds) {
         this.tripRepo = tripRepo;
         this.outboxRepo = outboxRepo;
+        this.sagaRepo = sagaRepo;
         this.eventRepo = eventRepo;
         this.idempotencyRepo = idempotencyRepo;
         this.json = json;
         this.fareBaseVnd = fareBaseVnd;
         this.farePerKmVnd = farePerKmVnd;
+        this.tripMatchDeadlineSeconds = Math.max(1, tripMatchDeadlineSeconds);
     }
 
     /** POST /api/trips/quote — không tạo trip, không side effect (contract §3.3). */
@@ -153,6 +160,10 @@ public class TripService {
         payload.put("excludedDriverIds", List.of());
         outboxRepo.insertPending(UUID.randomUUID(), "TripRequested", tripId, writeJson(payload), correlationId,
                 createdAt, 1, "trip.requested");
+
+        // T16 — Saga WAITING_MATCH (state-machines.md §1/§2): một saga per trip; deadline = createdAt +
+        // TRIP_MATCH_DEADLINE_SECONDS; context khởi tạo excludedDriverIds rỗng (T19+ cập nhật).
+        sagaRepo.insert(tripId, createdAt.plusSeconds(tripMatchDeadlineSeconds), "{\"excludedDriverIds\":[]}");
 
         // Trip event history (contract §3.5): transition đầu – -> SEARCHING.
         eventRepo.insert(tripId, "TRIP_CREATED", 1, user.userId(), "Trip created in SEARCHING");

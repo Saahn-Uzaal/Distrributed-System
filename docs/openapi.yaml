@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: DS03 Ride-Hailing — API (endpoint đã triển khai đến T12)
+  title: DS03 Ride-Hailing — API (endpoint REST đã triển khai đến T20)
   version: 0.1.0
   description: >
     OpenAPI cho các endpoint đã có code thật tại T12: identity-service (T06),
@@ -149,6 +149,27 @@ paths:
                 $ref: "#/components/schemas/LocationResult"
         "400": {$ref: "#/components/responses/InvalidInput"}
 
+  /api/drivers/me/offer:
+    get:
+      tags: [driver-public]
+      operationId: getCurrentOffer
+      summary: Đề nghị chuyến hiện tại của driver (role DRIVER) — T17
+      description: >
+        Dữ liệu lấy từ reservation local (không đọc Trip DB). Chỉ trả offer khi reservation là
+        current_reservation_id của chính driver, còn RESERVED và chưa hết hạn theo đồng hồ DB.
+        Không có offer (chưa được đề nghị, đã release/expire, hoặc đã CONFIRMED) -> 200 với body JSON null.
+        Chỉ đọc — không đổi heartbeat hay state.
+      responses:
+        "200":
+          description: Offer hiện tại, hoặc literal JSON null nếu không có
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Offer"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
   # ---------------- driver-service — internal (T09/T11) ----------------
   /internal/drivers/candidates:
     get:
@@ -166,6 +187,12 @@ paths:
         - name: limit
           in: query
           schema: {type: integer, default: 5}
+        - name: excludeDriverIds
+          in: query
+          description: driverId bị loại TRƯỚC khi áp limit (sửa T15); phân cách bằng dấu phẩy, tối đa 50
+          style: form
+          explode: false
+          schema: {type: array, maxItems: 50, items: {type: string, format: uuid}}
       responses:
         "200":
           description: Danh sách candidate (chỉ ID + khoảng cách — không tên/số xe)
@@ -341,7 +368,7 @@ paths:
         "202":
           description: Trip đã tạo (replay key cũ trả response gốc)
           headers:
-            Location: {schema: {type: string}, example: /api/trips/{tripId}}
+            Location: {schema: {type: string}, example: "/api/trips/{tripId}"}
           content:
             application/json:
               schema:
@@ -380,6 +407,89 @@ paths:
               schema:
                 $ref: "#/components/schemas/TripDetail"
         "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/trips/{id}/accept:
+    post:
+      tags: [trip]
+      operationId: acceptTrip
+      summary: Driver được offer nhận chuyến (role DRIVER) — T18
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AttemptRequest"}
+      responses:
+        "202":
+          description: state ACCEPTED (Driver đã confirm) hoặc DRIVER_OFFERED (kết quả confirm chưa rõ — gọi lại)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TripCommandResult"}
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: NOT_OFFERED_DRIVER (sai driver/attempt) hoặc STATE_CONFLICT (offer hết hạn/đã release, đang bị hủy/từ chối)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ApiError"}
+
+  /api/trips/{id}/reject:
+    post:
+      tags: [trip]
+      operationId: rejectTrip
+      summary: Driver được offer từ chối; release rồi tìm tài xế khác (role DRIVER) — T19
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AttemptRequest"}
+      responses:
+        "202":
+          description: state SEARCHING (matchingAttempt mới), NO_DRIVER (hết lượt) hoặc DRIVER_OFFERED (release chưa rõ — gọi lại)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TripCommandResult"}
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: NOT_OFFERED_DRIVER hoặc STATE_CONFLICT
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ApiError"}
+
+  /api/trips/{id}/cancel:
+    post:
+      tags: [trip]
+      operationId: cancelTrip
+      summary: Passenger (owner) hủy chuyến trước khi accept thắng — T20
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: CANCELLED (hủy từ SEARCHING xong ngay, hoặc đã hủy trước đó)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TripCommandResult"}
+        "202":
+          description: CANCELLED (đã release reservation đang offer) hoặc CANCELLING (release chưa rõ — gọi lại)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TripCommandResult"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: STATE_CONFLICT — accept đã thắng/đang accept, đang reject, hoặc trip NO_DRIVER/COMPLETED
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ApiError"}
 
 components:
   securitySchemes:
@@ -505,6 +615,33 @@ components:
       properties:
         driverId: {type: string, format: uuid}
         lastSeenAt: {type: string, format: date-time}
+
+    AttemptRequest:
+      type: object
+      required: [attempt]
+      properties:
+        attempt: {type: integer, minimum: 1, description: Phải khớp matchingAttempt của offer hiện tại}
+
+    TripCommandResult:
+      type: object
+      required: [tripId, state]
+      properties:
+        tripId: {type: string, format: uuid}
+        state: {type: string, enum: [SEARCHING, DRIVER_OFFERED, CANCELLING, ACCEPTED, CANCELLED, NO_DRIVER]}
+        matchingAttempt: {type: integer, description: Chỉ có trong response reject}
+
+    Offer:
+      type: object
+      nullable: true
+      required: [tripId, attempt, pickup, destination, distanceM, fareVnd, expiresAt]
+      properties:
+        tripId: {type: string, format: uuid}
+        attempt: {type: integer, minimum: 1}
+        pickup: {$ref: "#/components/schemas/GeoPoint"}
+        destination: {$ref: "#/components/schemas/GeoPoint"}
+        distanceM: {type: integer, format: int64}
+        fareVnd: {type: integer, format: int64}
+        expiresAt: {type: string, format: date-time}
 
     Candidate:
       type: object

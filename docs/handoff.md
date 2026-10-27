@@ -1,8 +1,30 @@
 # Handoff — trạng thái cho lượt kế tiếp
 
+**Cập nhật 27/10/2026 — T24 DONE** (trip nhận payment result; chi tiết [T24](tasks/T24.md); trip-service **123/0**, full repo `clean verify` **BUILD SUCCESS, 325 tests / 0 failures**). Task kế tiếp: **T25** — Notifications và trip event history (owner A; dep T19, T20, T22, T24 — cả bốn DONE).
+
+**Cập nhật 27/10/2026 — T23 DONE** (payment consumer; chi tiết [T23](tasks/T23.md); payment-service **18/0**, full repo `clean verify` **BUILD SUCCESS, 319 tests / 0 failures**). Task kế tiếp: **T24** — Trip nhận payment result (owner A; dep T23 DONE).
+
+**Cập nhật 26/10/2026 — T22 DONE** (start/complete + finish driver; chi tiết [T22](tasks/T22.md); trip-service **117/0**, full repo `clean verify` **BUILD SUCCESS, 312 tests / 0 failures**). Task kế tiếp: **T23** — Payment consumer (owner A; dep T13, T14, T22 — cả ba DONE).
+
+**Cập nhật 26/10/2026 — T21 DONE** (timeout và restart Saga; chi tiết [T21](tasks/T21.md); trip-service **111/0**, full repo `clean verify` **306 tests / 0 failures**). Task kế tiếp: **T22** — Start/complete và finish driver (owner A; dep T18, T21 — cả hai DONE).
+
+**Cập nhật 26/10/2026 — review và sửa T15/T16** ([T15](tasks/T15.md), [T16](tasks/T16.md) mục "Sửa sau review"): candidates API nhận `excludeDriverIds` (lọc trước LIMIT), matching khóa theo trip + bỏ qua trùng attempt, listener dùng correlationId của envelope, trip áp dụng `MATCHING_RETRY_DELAY_MS` thật, deadline theo đồng hồ DB trước khi reserve. Driver 120/0, matching 26/0, trip 103/0, identity 38/0.
+
+**Cập nhật 25/10/2026 — T18, T19, T20 DONE** (accept / reject / cancel + tranh chấp; chi tiết [T18](tasks/T18.md), [T19](tasks/T19.md), [T20](tasks/T20.md); full repo `clean verify` **291 tests / 0 failures**; đã chạy thật 4 service qua Nginx). Task kế tiếp: **T21** — timeout và restart Saga (owner A+B; dep T20 DONE).
+
+Trước đó: **T17 DONE** (driver đọc offer; [tasks/T17.md](tasks/T17.md); 267/0).
+
+Trước đó: **T16 DONE** (trip nhận proposal và reserve; [tasks/T16.md](tasks/T16.md); 259/0).
+
 Cập nhật: 2026-10-22, **FIX_LIST T01–T12 (82 mục) XONG TOÀN BỘ** — phase 1–8: C01–C06; T07 security + nginx T08-1..17; contract T05 (N15/N21–N24/F31, T05-7..12); T07 logging (F20/F21/N11/N12/N13 + Q01/Q02); T09–T12 correctness/time + **T12-6** (one active trip per passenger → 409 ACTIVE_TRIP_EXISTS); Phase 6 infra/scripts; Phase 7 frontend + nginx; **Phase 8** (C04 README/openapi.yaml, C06 flyway bounded retry + readiness probe live-verified, T06-1 control chars, T06-4 timing equalization, T07-11 body-size limit 413 ×5, T07-12 internal token fail-fast, T07-13 log secrets scan). Full repo `clean verify` **220 tests / 0 failures**; frontend **43/43** + build OK. Trạng thái từng mục theo checkbox `[x]` trong [docs/FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md); tiến độ + bằng chứng ở `docs/progress.md`. Lịch sử trước đó: R01–R07 của T09/T10/T12 và T11 DONE (130 tests lúc đó). Chi tiết: [sửa review](T09-T12_REVIEW_FIXES.md), [T11](tasks/T11.md).
 
 **Kết quả mới nhất:** Driver V4 + lifecycle confirm/release/finish, release-before-reserve tombstone, command claim nguyên tử, resource/operation hash, version bounds và expiry RESERVED. Trip V3 scope replay theo principal/operation/key, phân quyền qua driver_user_id, phân trang long. Candidates/event contract mang driverUserId tách biệt driverId. Test nâng cấp giữ replay cũ, contention qua deadline, fencing và restart ứng dụng đều pass. Chưa có publisher/matching/saga; không triển khai T13+ trong lượt này.
+
+## T13 DONE (23/10/2026)
+
+Outbox publisher Trip: [tasks/T13.md](tasks/T13.md). Worker claim row PENDING (`FOR UPDATE SKIP LOCKED` + lease), publish persistent + `mandatory` + confirms, `eventId` = `outbox.id`, returned/lỗi → PENDING + `last_error` + backoff (tối đa 30 s). trip-service cần env `RABBITMQ_PASSWORD` (không có default). Full repo 239/0.
+
+**T16 đã xong 25/10** — Trip nhận proposal và reserve (owner A); chi tiết [tasks/T16.md](tasks/T16.md). Task kế tiếp: **T17** — xem mục "Task kế tiếp đề xuất" phía dưới.
 
 ## ⚠️ Đánh giá 22/10 và sửa tiếp L01–L13 (đọc trước khi làm T13)
 
@@ -48,18 +70,34 @@ Từ 21/10/2026, rà soát toàn bộ T01–T12 lập danh sách **82 mục cầ
 
 ## Task kế tiếp đề xuất (chưa thực hiện)
 
-**FIX_LIST_T01-T12 đã xong toàn bộ (82/82)** — full verify **220 tests / 0 failures**, frontend 43/43 + build OK. Bước tiếp theo là **T13** (Outbox publisher Trip) hoặc T14 theo backlog.
+**T21 DONE (26/10)** — chi tiết [tasks/T21.md](tasks/T21.md). Bước tiếp theo: **T22** — Start/complete và finish driver (owner A; dep T18, T21 — cả hai DONE).
 
-### T13 hoặc T14 (chỉ sau khi FIX_LIST xong)
+### F. T21 — Timeout và restart Saga (owner A+B) — DONE (26/10/2026)
+- Chi tiết: [tasks/T21.md](tasks/T21.md). Worker `SagaRecoveryWorker` + cột `sagas.lease_owner` (migration V7): offer TTL hết hạn → release `OFFER_EXPIRED`; deadline tổng WAITING_MATCH → tombstone mọi reservationId tất định của attempt → NO_DRIVER; intent treo CONFIRMING/COMPENSATING → resume idempotent. Restart verify bằng hai application context thật trên một PG, broker vắng mặt (outbox PENDING). Trip-service 111/0; full repo 306/0.
+- Lưu ý cho T22: saga `AWAITING_FINISH` (desired `NONE`) là trạng thái sau ACCEPTED — T22 đặt `FINISH_ASSIGNMENT` khi complete (state-machines.md §1/§2); endpoint start/complete thuộc contract §3.3.
+
+### E. T18 — Accept chuyến (owner A) — gợi ý cho lượt sau
+- Phạm vi (spec §20.5): accept endpoint, kiểm tra offered driver/attempt, lưu intent ACCEPT, confirm idempotent, Trip ACCEPTED sau xác nhận. Acceptance: sai driver bị chặn; accept lặp không thêm assignment; confirm timeout dùng GET reconcile, không xác nhận giả.
+- Driver lấy `tripId` + `attempt` từ `GET /api/drivers/me/offer` (T17) rồi gọi `POST /api/trips/{id}/accept` với `{"attempt": n}`. Offer chỉ hiển thị khi reservation còn RESERVED và chưa hết hạn theo `clock_timestamp()` — cùng điều kiện confirm của Driver sẽ kiểm tra.
+
+### D. T17 — Driver đọc offer (owner B) — DONE (25/10/2026)
+- Chi tiết: [tasks/T17.md](tasks/T17.md). Chốt contract §3.2: offer = `current_reservation_id` của driver, RESERVED, chưa hết hạn theo DB; không có → 200 literal JSON `null`; chưa có profile → 404; CONFIRMED không còn là offer; chỉ đọc.
+- Gate tích hợp đầu của spec (REST tạo trip → RabbitMQ matching → Driver reservation → GET offer): từng chặng đã có test riêng (T13–T17), **chưa chạy xuyên 4 service trong một lượt**; nên làm khi có seed/smoke (T26) hoặc trước T18.
+
+### T13, T14, T15 — DONE (23/10, 25/10)
 ### A. T13 — Outbox publisher Trip (owner A, tiếp nối T12)
 - Phạm vi (spec §20.4): **Trip outbox schema/worker, publisher confirms, retry publish với eventId ổn định; phát TripRequested**.
 - Trạng thái hiện có: bảng `outbox` + row PENDING đã tạo ở T12 — T13 chỉ cần worker scan pending → build envelope chuẩn (eventId = outbox.id, producer `trip-service`, correlationId giữ nguyên, schemaVersion 1) → publish persistent + confirms qua RabbitMQ (`ride.events` rk `trip.requested`) → đánh dấu SENT; retry transient theo events.md §4.3.
 - Dependency: T04 (DONE), T12 (DONE); blocker cũ (F01+N10, N15/N21–N24/F31 trong [FIX_LIST_T01-T12.md](FIX_LIST_T01-T12.md)) **đã gỡ** — FIX_LIST 82/82 xong.
 - Nguồn sự thật: `events.md` §2/§3.1/§4.6 + topology T04 (`deploy/rabbitmq/declare-topology.sh`); management API RabbitMQ ghi ở handoff trước.
-### B. T14 — Consumer inbox và retry (owner B)
-- Dependency T04/T05/T07 đã DONE; T14 vẫn TODO, chưa có consumer nghiệp vụ được thêm trong lượt này.
-- Đọc events.md về inbox dedup, ACK sau commit, retry hữu hạn và DLQ trước khi triển khai.
-- T11 đã DONE, không làm lại; port 18101 đã dùng cho ReservationLifecycleIntegrationTest. T16 vẫn chờ T13/T14/T15.
+### B. T14 — Consumer inbox và retry (owner B) — DONE (25/10/2026)
+- Chi tiết: [tasks/T14.md](tasks/T14.md). Inbox consumer matching-service: validate §2, dedup unique `(consumer_name, event_id)` + handler trong 1 transaction (ACK sau commit), retry in-process hữu hạn rồi reject(requeue=false) → DLQ; malformed/unsupported republish chủ động kèm `x-dlq-reason`. Full repo 244/0.
+- Port 18101 đã dùng cho ReservationLifecycleIntegrationTest; test matching dùng cổng AMQP host động (`freeLocalPort()` + fixed PortBinding pattern từ T13).
+### C. T15 — Matching job thật (owner B) — DONE (25/10/2026)
+- Chi tiết: [tasks/T15.md](tasks/T15.md). Consume TripRequested → `matching_jobs` + gọi candidates driver-service (internal, X-Internal-Token) → lọc excludedDriverIds → outbox phát DriverProposed/NoDriverFound; không tự reserve. Full repo 251/0.
+- Chạy local matching-service cần thêm env tiến trình: `DRIVER_SERVICE_URL` (mặc định `http://localhost:8082`) và `INTERNAL_API_TOKEN` (**không có default** — thiếu thì service dừng ngay, cùng quy tắc N09).
+- Bài học test-scoped config: mọi @Configuration chỉ-dùng-test phải nằm ngoài cây package của app (FaultInjectionConfig đã chuyển sang `com.ridehailing.matchingtest`).
+- Task kế tiếp: **T16** — Trip nhận proposal và reserve (owner A). Lưu ý cho T16: trip-service declare queue `trip.inbox` bind `matching.#`; env phía trip `MAX_MATCHING_ATTEMPTS`/`MATCHING_RETRY_DELAY_MS` (contract §6); assignment hiệu lực chỉ từ ACCEPTED (chốt N22 — ghi `trips.driver_id`/`driver_user_id` khi DRIVER_OFFERED).
 
 ## Ghi chú kỹ thuật hữu ích cho task sau
 - Management API RabbitMQ 3.13.7: `POST /api/queues/%2F/{q}/get` body `{"ackmode":"ack_requeue_false"|"reject_requeue_false", "count":"<n>", "encoding":"auto"|"base64"}` (GET bị 405; encoding không nhận utf8). Publish: `POST /api/exchanges/%2F/{ex}/publish`. Chi tiết trong `docs/tasks/T04.md`.

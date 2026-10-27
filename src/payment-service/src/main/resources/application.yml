@@ -6,6 +6,16 @@ server:
 spring:
   application:
     name: payment-service
+  # T23 — RabbitMQ consumer (events.md §1/§4): inbox payment.inbox, manual ACK, DLQ.
+  # Connection factory lazy — broker down lúc khởi động KHÔNG chặn app; listener container
+  # tự retry kết nối ở nền cho tới khi broker lên lại (đã kiểm chứng trên spring-rabbit 4.1.1).
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_AMQP_PORT:5672}
+    username: ${RABBITMQ_USER:ridehailing_dev}
+    # N09: không có giá trị mặc định cho mật khẩu — thiếu env thì kết nối broker thất bại,
+    # listener retry ở nền; app vẫn khởi động (broker không nằm trong readiness).
+    password: ${RABBITMQ_PASSWORD}
   datasource:
     url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/payment_db
     username: payment_svc
@@ -19,11 +29,34 @@ spring:
       # (pool ấm không tự phát hiện kết nối chết nếu chỉ dựa vào isValid()).
       connection-test-query: SELECT 1
 
+# T23 — inbox consumer (events.md §4): dedup unique (consumer_name, event_id), ACK sau commit;
+# transient failure retry in-process có giới hạn với backoff rồi reject(requeue=false) → DLQ.
+app:
+  inbox:
+    consumer-name: payment-service # thành phần dedup — mỗi service một tên riêng (§4.1)
+    max-retries: 3                  # số lần retry sau attempt đầu tiên fail (tổng tối đa 4 execution)
+    retry-backoff-ms: 1000,3000,10000
+  # T23 — outbox producer payment-service (events.md §4.6, pattern trip T13/matching T15).
+  outbox:
+    enabled: true
+    batch-size: 10
+    confirm-timeout-ms: 5000
+    publish-interval-ms: 1000
+  # T23 — simulate success/failure cấu hình dev (spec §20.5): xác suất decline giả lập.
+  # 0 = luôn thành công; 1 = luôn decline; env PAYMENT_SIMULATE_FAIL_RATE cho demo/dev.
+  payment:
+    simulate-fail-rate: ${PAYMENT_SIMULATE_FAIL_RATE:0}
+
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  health:
+    rabbit:
+      # T23: broker KHÔNG nằm trong /actuator/health — readiness chỉ phản ánh DB (như trip T13);
+      # broker down không được làm service DOWN.
+      enabled: false
   endpoint:
     health:
       probes:

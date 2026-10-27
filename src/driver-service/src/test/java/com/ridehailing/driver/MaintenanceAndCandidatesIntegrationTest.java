@@ -140,6 +140,33 @@ class MaintenanceAndCandidatesIntegrationTest {
         assertThat(candidateIds(0.0, -179.995, 5000)).containsExactlyInAnyOrder(east.toString(), west.toString());
     }
 
+    /** T15 fix (M1): 5 driver gần nhất bị loại trừ → API vẫn trả driver thứ 6 (loại TRƯỚC limit, trong SQL). */
+    @Test
+    void excludedDriversAreRemovedBeforeLimit() throws Exception {
+        List<UUID> nearest = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            nearest.add(insertAvailableDriver(10.7769, 106.7009 + i * 0.0001));
+        }
+        UUID farther = insertAvailableDriver(10.7769, 106.7109); // ~1,1 km
+
+        String exclude = String.join(",", nearest.stream().map(UUID::toString).toList());
+        List<String> ids = candidateIds(10.7769, 106.7009, 5000, "&excludeDriverIds=" + exclude);
+
+        assertThat(ids).containsExactly(farther.toString());
+        // Không truyền exclude: 5 driver gần nhất chiếm hết chỗ, driver thứ 6 không xuất hiện.
+        assertThat(candidateIds(10.7769, 106.7009, 5000)).doesNotContain(farther.toString()).hasSize(5);
+    }
+
+    @Test
+    void tooManyExcludedIdsIsRejected() throws Exception {
+        String exclude = String.join(",", java.util.stream.Stream.generate(() -> UUID.randomUUID().toString())
+                .limit(51).toList());
+        HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                        + "/internal/drivers/candidates?lat=10.7&lng=106.7&excludeDriverIds=" + exclude))
+                .header("X-Internal-Token", INTERNAL_TOKEN).GET().build();
+        assertThat(HTTP.send(req, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(400);
+    }
+
     private UUID insertAvailableDriver(double latitude, double longitude) {
         UUID vehicleId = jdbc.queryForObject(
                 "INSERT INTO vehicles (plate_number, vehicle_type) VALUES (?, 'CAR') RETURNING id",
@@ -150,10 +177,14 @@ class MaintenanceAndCandidatesIntegrationTest {
                 UUID.class, UUID.randomUUID(), vehicleId, latitude, longitude);
     }
 
-    @SuppressWarnings("unchecked")
     private List<String> candidateIds(double lat, double lng, int radiusM) throws Exception {
+        return candidateIds(lat, lng, radiusM, "");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> candidateIds(double lat, double lng, int radiusM, String extraQuery) throws Exception {
         HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + port
-                        + "/internal/drivers/candidates?lat=" + lat + "&lng=" + lng + "&radiusM=" + radiusM))
+                        + "/internal/drivers/candidates?lat=" + lat + "&lng=" + lng + "&radiusM=" + radiusM + extraQuery))
                 .header("X-Internal-Token", INTERNAL_TOKEN)
                 .GET().build();
         HttpResponse<String> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());

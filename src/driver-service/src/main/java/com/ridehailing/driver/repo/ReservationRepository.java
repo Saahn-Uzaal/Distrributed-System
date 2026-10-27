@@ -109,6 +109,27 @@ public class ReservationRepository {
         return rows.stream().findFirst();
     }
 
+    /**
+     * T17 — offer hiện tại của một driver (contract §3.2 GET /api/drivers/me/offer), đọc từ dữ liệu local.
+     * Chỉ trả reservation khi đồng thời:
+     * <ul>
+     *   <li>là {@code current_reservation_id} của driver và driver đang RESERVED (fencing — reservation cũ
+     *       đã release/expire hoặc của driver khác không bao giờ lộ ra);</li>
+     *   <li>reservation thuộc chính driver đó và còn state RESERVED (CONFIRMED = đã nhận, không còn là offer);</li>
+     *   <li>chưa hết hạn theo {@code clock_timestamp()} của PostgreSQL — cùng nguồn đồng hồ với expiry worker
+     *       và confirm (R04), nên offer biến mất đúng lúc hết hạn dù worker chưa kịp chạy.</li>
+     * </ul>
+     */
+    public Optional<ReservationRow> findCurrentOffer(UUID driverId) {
+        List<ReservationRow> rows = jdbc.query(
+                "SELECT r.* FROM drivers d JOIN reservations r ON r.id = d.current_reservation_id"
+                        + " WHERE d.id = ? AND d.status = 'RESERVED' AND d.current_trip_id IS NULL"
+                        + " AND r.driver_id = d.id AND r.state = 'RESERVED'"
+                        + " AND r.expires_at > clock_timestamp()",
+                new Object[]{driverId}, this::mapReservation);
+        return rows.stream().findFirst();
+    }
+
     /** Insert a complete live reservation; release-before-reserve uses insertTombstone instead. */
     public void insertReserved(UUID id, UUID tripId, UUID driverId, int attempt, Instant expiresAt,
                               int lastCommandVersion, double pickupLat, double pickupLng,

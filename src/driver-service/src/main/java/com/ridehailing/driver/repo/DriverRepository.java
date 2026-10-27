@@ -123,6 +123,11 @@ public class DriverRepository {
      */
     public List<DriverRow> findCandidatesInBox(double latitude, double longitude, int radiusM,
                                                long heartbeatStaleAfterMs, int limit) {
+        return findCandidatesInBox(latitude, longitude, radiusM, heartbeatStaleAfterMs, limit, List.of());
+    }
+
+    public List<DriverRow> findCandidatesInBox(double latitude, double longitude, int radiusM,
+                                               long heartbeatStaleAfterMs, int limit, List<UUID> excludeDriverIds) {
         double latDelta = (radiusM / 1000.0) / 111.0;
         double cosLat = Math.max(Math.cos(Math.toRadians(latitude)), 1e-6);
         double lngDelta = (radiusM / 1000.0) / (111.0 * cosLat);
@@ -136,6 +141,14 @@ public class DriverRepository {
         params.add(heartbeatStaleAfterMs / 1000.0);
         params.add(latitude - latDelta);
         params.add(latitude + latDelta);
+
+        // T15 fix (M1): loại driver bị loại trừ ngay trong SQL, trước ORDER BY ... LIMIT.
+        if (!excludeDriverIds.isEmpty()) {
+            sql.append(" AND id NOT IN (")
+                    .append(String.join(",", java.util.Collections.nCopies(excludeDriverIds.size(), "?")))
+                    .append(")");
+            params.addAll(excludeDriverIds);
+        }
 
         // L07: kinh độ quấn quanh ±180°. Box chạm cực hoặc rộng >= 360° -> không lọc kinh độ;
         // vượt -180/+180 -> tách thành hai khoảng.

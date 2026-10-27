@@ -66,6 +66,97 @@ public class TripRepository {
         return c == null ? 0 : c;
     }
 
+    /** T16 — SEARCHING → DRIVER_OFFERED (state-machines.md §1): set driver_id/driver_user_id/reservation_id
+     *  + version+1, guard state/matching_attempt hiện tại. Trả số row update (0 = CAS fail). */
+    public int markDriverOffered(UUID tripId, String expectedState, int expectedAttempt,
+                                UUID driverId, UUID driverUserId, UUID reservationId) {
+        return jdbc.update("UPDATE trips SET state = 'DRIVER_OFFERED', driver_id = ?, driver_user_id = ?,"
+                        + " reservation_id = ?, version = version + 1, updated_at = clock_timestamp()"
+                        + " WHERE id = ? AND state = ? AND matching_attempt = ?",
+                driverId, driverUserId, reservationId, tripId, expectedState, expectedAttempt);
+    }
+
+    /** T16 — SEARCHING → SEARCHING: attempt+1 (events.md §3.2), version+1; guard state/attempt hiện tại. */
+    public int bumpMatchingAttempt(UUID tripId, String expectedState, int expectedAttempt) {
+        return jdbc.update("UPDATE trips SET matching_attempt = matching_attempt + 1,"
+                        + " version = version + 1, updated_at = clock_timestamp()"
+                        + " WHERE id = ? AND state = ? AND matching_attempt = ?",
+                tripId, expectedState, expectedAttempt);
+    }
+
+    /** T16 — SEARCHING → NO_DRIVER terminal (events.md §3.2), version+1; guard state/attempt hiện tại. */
+    public int markNoDriver(UUID tripId, String expectedState, int expectedAttempt) {
+        return jdbc.update("UPDATE trips SET state = 'NO_DRIVER', version = version + 1,"
+                        + " updated_at = clock_timestamp() WHERE id = ? AND state = ? AND matching_attempt = ?",
+                tripId, expectedState, expectedAttempt);
+    }
+
+    // ---------- T18–T20: chuyển trạng thái có điều kiện, trả version mới (empty = CAS thất bại) ----------
+
+    private Optional<Integer> updateReturningVersion(String sql, Object... args) {
+        List<Integer> rows = jdbc.query(sql, (rs, i) -> rs.getInt("version"), args);
+        return rows.stream().findFirst();
+    }
+
+    /** T18 — DRIVER_OFFERED → ACCEPTED, chỉ khi đúng attempt đang offer. */
+    public Optional<Integer> markAccepted(UUID tripId, int attempt) {
+        return updateReturningVersion("UPDATE trips SET state = 'ACCEPTED', version = version + 1,"
+                + " updated_at = clock_timestamp() WHERE id = ? AND state = 'DRIVER_OFFERED' AND matching_attempt = ?"
+                + " RETURNING version", tripId, attempt);
+    }
+
+    /** T19 — DRIVER_OFFERED → SEARCHING (attempt + 1) sau khi release đã xác nhận; xóa driver/reservation
+     *  (chốt N22: driver_id/driver_user_id về NULL khi reject/expire). */
+    public Optional<Integer> markSearchingAfterRelease(UUID tripId, int attempt) {
+        return updateReturningVersion("UPDATE trips SET state = 'SEARCHING', matching_attempt = matching_attempt + 1,"
+                + " driver_id = NULL, driver_user_id = NULL, reservation_id = NULL, version = version + 1,"
+                + " updated_at = clock_timestamp() WHERE id = ? AND state = 'DRIVER_OFFERED' AND matching_attempt = ?"
+                + " RETURNING version", tripId, attempt);
+    }
+
+    /** T19 — DRIVER_OFFERED → NO_DRIVER (hết lượt/deadline) sau khi release đã xác nhận. */
+    public Optional<Integer> markNoDriverAfterRelease(UUID tripId, int attempt) {
+        return updateReturningVersion("UPDATE trips SET state = 'NO_DRIVER', driver_id = NULL, driver_user_id = NULL,"
+                + " reservation_id = NULL, version = version + 1, updated_at = clock_timestamp()"
+                + " WHERE id = ? AND state = 'DRIVER_OFFERED' AND matching_attempt = ? RETURNING version", tripId, attempt);
+    }
+
+    /** T20 — SEARCHING/DRIVER_OFFERED → CANCELLING (transient, đang bù trừ). */
+    public Optional<Integer> markCancelling(UUID tripId, String fromState) {
+        return updateReturningVersion("UPDATE trips SET state = 'CANCELLING', version = version + 1,"
+                + " updated_at = clock_timestamp() WHERE id = ? AND state = ? RETURNING version", tripId, fromState);
+    }
+
+    /** T20 — CANCELLING → CANCELLED sau khi mọi reservation liên quan đã terminal; xóa driver. */
+    public Optional<Integer> markCancelled(UUID tripId) {
+        return updateReturningVersion("UPDATE trips SET state = 'CANCELLED', driver_id = NULL, driver_user_id = NULL,"
+                + " version = version + 1, updated_at = clock_timestamp()"
+                + " WHERE id = ? AND state = 'CANCELLING' RETURNING version", tripId);
+    }
+
+    /** T22 — ACCEPTED → IN_PROGRESS (state-machines.md §1), version+1; guard state hiện tại. */
+    public Optional<Integer> markInProgress(UUID tripId) {
+        return updateReturningVersion("UPDATE trips SET state = 'IN_PROGRESS', version = version + 1,"
+                + " updated_at = clock_timestamp() WHERE id = ? AND state = 'ACCEPTED' RETURNING version", tripId);
+    }
+
+    /** T22 — IN_PROGRESS → COMPLETED (state-machines.md §1): payment PENDING + attempt khởi tạo 1,
+     *  version+1; guard state hiện tại. */
+    public Optional<Integer> markCompleted(UUID tripId) {
+        return updateReturningVersion("UPDATE trips SET state = 'COMPLETED', payment_status = 'PENDING',"
+                + " payment_attempt = 1, version = version + 1, updated_at = clock_timestamp()"
+                + " WHERE id = ? AND state = 'IN_PROGRESS' RETURNING version", tripId);
+    }
+
+    /** T24 — consume PaymentSucceeded/PaymentFailed (state-machines.md §5): payment_status PENDING →
+     *  SUCCEEDED/FAILED, version+1; guard state COMPLETED + đúng attempt + payment_status PENDING.
+     *  CAS fail (event stale/trùng) → empty → handler rollback + retry bounded. */
+    public Optional<Integer> markPaymentResult(UUID tripId, String status, int attempt) {
+        return updateReturningVersion("UPDATE trips SET payment_status = ?, version = version + 1,"
+                + " updated_at = clock_timestamp() WHERE id = ? AND state = 'COMPLETED'"
+                + " AND payment_status = 'PENDING' AND payment_attempt = ? RETURNING version", status, tripId, attempt);
+    }
+
     /** T12-6 (N28): advisory lock transaction-scope theo passenger — serialize các create đồng thời
      * của cùng passenger; tự release khi transaction kết thúc. */
     public void acquirePassengerAdvisoryLock(UUID passengerId) {

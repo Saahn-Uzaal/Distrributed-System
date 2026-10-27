@@ -3,7 +3,9 @@ package com.ridehailing.trip.web;
 import com.ridehailing.trip.security.JwtAuthenticationFilter;
 import com.ridehailing.trip.security.AuthenticatedUser;
 import com.ridehailing.trip.security.CorrelationIdFilter;
+import com.ridehailing.trip.service.TripCommandService;
 import com.ridehailing.trip.service.TripService;
+import com.ridehailing.trip.web.dto.AttemptRequest;
 import com.ridehailing.trip.web.dto.QuoteRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,16 +24,67 @@ import java.util.UUID;
 /**
  * T12 — public endpoints trip (contract api-contracts.md §3.3): quote, create (idempotent), list, get.
  * Auth/role đã enforce bởi SecurityFilterChain (T07-1): POST quote/create -> PASSENGER; GET mọi role xác thực.
- * Cancel/accept/reject/start/complete thuộc T18–T22 — chưa có handler ở đây.
+ * T18–T22: accept/reject/cancel/start/complete ủy quyền cho TripCommandService.
  */
 @RestController
 @RequestMapping("/api/trips")
 public class TripController {
 
     private final TripService tripService;
+    private final TripCommandService commandService;
 
-    public TripController(TripService tripService) {
+    public TripController(TripService tripService, TripCommandService commandService) {
         this.tripService = tripService;
+        this.commandService = commandService;
+    }
+
+    /** T18 — POST /api/trips/{id}/accept (chỉ offered driver; role DRIVER enforce ở SecurityConfig). */
+    @PostMapping("/{id}/accept")
+    public ResponseEntity<Map<String, Object>> accept(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @PathVariable UUID id,
+            @RequestBody AttemptRequest body) {
+        return toResponse(commandService.accept(id, user, body == null ? null : body.attempt()));
+    }
+
+    /** T19 — POST /api/trips/{id}/reject (chỉ offered driver; role DRIVER enforce ở SecurityConfig). */
+    @PostMapping("/{id}/reject")
+    public ResponseEntity<Map<String, Object>> reject(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) String correlationId,
+            @PathVariable UUID id,
+            @RequestBody AttemptRequest body) {
+        return toResponse(commandService.reject(id, user, body == null ? null : body.attempt(),
+                UUID.fromString(correlationId)));
+    }
+
+    /** T20 — POST /api/trips/{id}/cancel (chỉ owner passenger; role PASSENGER enforce ở SecurityConfig). */
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<Map<String, Object>> cancel(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @PathVariable UUID id) {
+        return toResponse(commandService.cancel(id, user));
+    }
+
+    /** T22 — POST /api/trips/{id}/start (chỉ assigned driver; role DRIVER enforce ở SecurityConfig). */
+    @PostMapping("/{id}/start")
+    public ResponseEntity<Map<String, Object>> start(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @PathVariable UUID id) {
+        return toResponse(commandService.start(id, user));
+    }
+
+    /** T22 — POST /api/trips/{id}/complete (chỉ assigned driver; role DRIVER enforce ở SecurityConfig). */
+    @PostMapping("/{id}/complete")
+    public ResponseEntity<Map<String, Object>> complete(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) String correlationId,
+            @PathVariable UUID id) {
+        return toResponse(commandService.complete(id, user, UUID.fromString(correlationId)));
+    }
+
+    private static ResponseEntity<Map<String, Object>> toResponse(TripCommandService.CommandOutcome outcome) {
+        return ResponseEntity.status(outcome.httpStatus()).body(outcome.body());
     }
 
     /** POST /api/trips/quote — 200 {distanceM, fareVnd}; không tạo trip. */

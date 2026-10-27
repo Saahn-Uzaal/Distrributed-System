@@ -582,3 +582,212 @@ T08-3..8, T08-11..17, T05-11 đánh dấu `[x]` kèm bằng chứng. Còn mở: 
 | Probe Nginx :8080 | 400/404/502 JSON có `details`; correlation ID ngẫu nhiên; UUID client giữ nguyên |
 
 Chưa commit — chờ người dùng quyết định (xem L02 về tài khoản tác giả).
+
+## Lượt 2026-10-23 — T13 Outbox publisher Trip (review + sửa) — DONE
+
+Người dùng đã viết T13; lượt này review và sửa. Chi tiết: [T13](tasks/T13.md).
+
+### Sửa trong review
+- Mật khẩu RabbitMQ có giá trị mặc định trong `application.yml` (vi phạm N09) → bỏ default, `RequiredDbPasswordValidator` kiểm tra thêm `RABBITMQ_PASSWORD`.
+- Backoff tính bằng `Instant.now()` JVM nhưng so với `now()` DB → mọi mốc thời gian outbox dùng `clock_timestamp()` (R04).
+- SELECT không khóa → hai worker có thể publish trùng → claim `FOR UPDATE SKIP LOCKED` + lease.
+- ReturnListener cộng dồn trên channel được cache; chờ cố định 200 ms sau mỗi message (~5 msg/s) → gỡ listener sau mỗi lần, kiểm tra return ngay sau confirm (return luôn đến trước ack), khớp theo `messageId`.
+- Payload hỏng ném exception → row đó chặn đầu hàng đợi mãi → trả lỗi, backoff, row sau vẫn chạy; worker bắt lỗi từng row và lỗi DB khi claim.
+- Test broker down/up fail vì Docker cấp cổng host mới sau restart → cố định cổng host trong test.
+- Thêm test: poison row, 2 worker song song (20 row, mỗi event đúng 1 lần), rollback không phát event; log có `correlationId`/`tripId`; README cập nhật env RabbitMQ.
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service -am clean verify` | 69/0 (`OutboxPublishIntegrationTest` 6/6, broker down/up ~40 s); log 0 lỗi scheduled task |
+| `OutboxPublishIntegrationTest` lặp 2 lần | 6/6 cả hai lần |
+| `./mvnw -B clean verify` toàn repo | **239 tests / 0 failures** (identity 38, driver 110, trip 69, matching 11, payment 11) |
+
+Không chạy trip-service với DB/broker dev (tránh migrate `trip_db` dev và để lại message trong `matching.inbox`). Chưa commit.
+
+## Lượt 2026-10-25 — T14 Consumer inbox và retry (matching-service) — DONE
+
+Chi tiết: [T14](tasks/T14.md).
+
+### Việc đã làm
+- Inbox consumer matching-service theo events.md §2/§4/§6: validate envelope; dedup unique `(consumer_name, event_id)` insert + handler trong 1 transaction (ACK chỉ sau commit); transient failure retry in-process hữu hạn (attempt đầu + tối đa 3, backoff `app.inbox.retry-backoff-ms` mặc định `1000,3000,10000`) rồi `reject(requeue=false)` → DLQ; malformed/unsupported republish chủ động vào `ride.events.dlx` rk `matching.dlq` kèm header `x-dlq-reason` + ACK gốc.
+- Migration V2: bảng `inbox_events` (dedup) + `matching_probe_events` (side effect probe handler, T14-only).
+- Topology declare bởi service khi khởi động (RabbitAdmin declarables): exchange `ride.events`/`ride.events.dlx`, queue `matching.inbox` (+binding rk `trip.requested`) và `matching.dlq`; broker down không chặn startup.
+- Fault injection test-only (`FaultInjectionConfig` @Primary wrapper probe handler) — không có knob production.
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` toàn repo | BUILD SUCCESS — **244 tests / 0 failures** (identity 38, driver 110, trip 69, matching 16, payment 11) |
+| matching module | `InboxConsumerIntegrationTest` 5/5 trên PostgreSQL + RabbitMQ thật (Testcontainers): duplicate once, malformed→DLQ `x-dlq-reason`, unsupported_event_type, retry bounded, exhausted→x-death only; `JsonLogLayoutTest` 6/6; `SecuritySmokeTest` 5/5 |
+
+Không chạy service với DB/broker dev (tránh migrate `matching_db` dev và để lại message trong `matching.inbox`). Chưa commit.
+
+## Lượt 2026-10-25 — T15 Matching job thật (matching-service) — DONE
+
+Chi tiết: [T15](tasks/T15.md).
+
+### Việc đã làm
+- matching-service consume `TripRequested` → lưu job/attempt vào `matching_jobs` (unique `(trip_id, attempt)`), gọi candidates API driver-service (internal, `X-Internal-Token`), lọc excludedDriverIds; Matching outbox phát `DriverProposed` (candidates có thứ tự distanceM tăng) hoặc `NoDriverFound`. **Không tự reserve driver** — trip-service nhận proposal và gọi reserve ở T16.
+- Migration V3: `matching_jobs` + outbox matching riêng (event_type chỉ DriverProposed/NoDriverFound, causation_id = eventId TripRequested theo events.md §5).
+- Outbox publisher/worker mirror trip T13 (claim lease `FOR UPDATE SKIP LOCKED`, persistent + mandatory + confirms, backoff tối đa 30 s); envelope bỏ `aggregateVersion` khi = 0 (§2 optional — matching không đọc Trip DB).
+- Stale-event guard theo events.md §4.4 qua chính bảng `matching_jobs` (`MAX(attempt) > attempt` → skip + ACK, không DLQ).
+- Fail-fast startup nếu thiếu `INTERNAL_API_TOKEN` (pattern N08/N09); env mới `DRIVER_SERVICE_URL`/`MATCHING_RADIUS_M`/`MATCHING_MAX_CANDIDATES`/`MATCHING_HTTP_TIMEOUT_MS`.
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/matching-service clean verify` | **23 tests / 0 failures** — `MatchingJobIntegrationTest` 7/7 trên PostgreSQL + RabbitMQ thật (Testcontainers) + stub JDK HttpServer cho candidates API; `InboxConsumerIntegrationTest` 5/5; `JsonLogLayoutTest` 6/6; `SecuritySmokeTest` 5/5 |
+| `./mvnw -B clean verify` toàn repo | BUILD SUCCESS — **251 tests / 0 failures** (identity 38, driver 110, trip 69, matching 23, payment 11) |
+
+Không chạy service với DB/broker dev (tránh migrate `matching_db` dev và để lại message trong `matching.inbox`). Chưa commit.
+
+## Lượt 2026-10-25 — T16 Trip nhận proposal và reserve (trip-service) — DONE
+
+Chi tiết: [T16](tasks/T16.md).
+
+### Việc đã làm
+- trip-service consume `DriverProposed`/`NoDriverFound` từ queue `trip.inbox` (bind `matching.#` + `payment.#`, DLQ `trip.dlq`): validate envelope, dedup unique `(consumer_name, event_id)` insert + handler trong 1 transaction (ACK sau commit), retry in-process hữu hạn (3 lần, backoff `1000,3000,10000`) rồi reject → DLQ; malformed/unsupported republish dlx kèm `x-dlq-reason`.
+- Migration V6: `sagas` (một row per trip, phase/desired_action theo state-machines.md §2, CAS version+phase, deadline_at) + `inbox_events` (dedup).
+- Handler: stale guard (§4.4 → log `stale_event_skipped` + ACK) → saga WAITING_MATCH check → thử reserve candidate theo thứ tự qua internal API driver-service (`PUT /internal/reservations/{id}`, body contract §4.2, reservationId/commandId deterministic UUID v3); 201 → success; 409 conflict → candidate kế tiếp; `COMMAND_CONFLICT`/timeout → GET reconcile CÙNG reservationId (RESERVED khớp = thành công), timeout mù → retry PUT một lần rồi RuntimeException bounded.
+- Success: saga CAS → WAITING_DRIVER + trips CAS DRIVER_OFFERED (driver_id/driver_user_id/reservation_id) + trip_event DRIVER_OFFERED — mọi đọc trước, HTTP giữa, ghi sau trong 1 transaction (không giữ DB lock khi gọi HTTP).
+- Hết candidate/NoDriverFound: attempt < max và chưa quá deadline → SEARCHING→SEARCHING attempt+1 + saga next_retry_at = now + MATCHING_RETRY_DELAY_MS + outbox PENDING TripRequested (causationId = eventId event này, §5); ngược lại NO_DRIVER terminal + trip_event + saga ABORTED.
+- `TripService.create()` insert saga WAITING_MATCH cùng transaction (deadline = createdAt + TRIP_MATCH_DEADLINE_SECONDS) — hoàn tất chốt T12. Fail-fast startup khi thiếu `INTERNAL_API_TOKEN` (N08/N09); env mới `DRIVER_SERVICE_URL`/`OFFER_TTL_SECONDS`/`MAX_MATCHING_ATTEMPTS`/`MATCHING_RETRY_DELAY_MS`/`TRIP_MATCH_DEADLINE_SECONDS`.
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service clean verify` | **77 tests / 0 failures** — `TripProposalIntegrationTest` 8/8 trên PostgreSQL + RabbitMQ thật (Testcontainers) + stub JDK HttpServer cho internal API driver-service; `TripIntegrationTest` 28/28; `OutboxPublishIntegrationTest` 6/6; `SecurityProbeTest` 25/25; `JsonLogLayoutTest` 6/6; `HaversineTest` 4/4 |
+| `./mvnw -B clean verify` toàn repo | BUILD SUCCESS — **259 tests / 0 failures** (identity 38, driver 110, trip 77, matching 23, payment 11) |
+
+Sửa trong lượt: jsonb cast PGobject→String ở `SagaRepository.findByTripId`; Spring 7 RestClient ném `RestClientException` khi read-timeout (catch broaden); assertion Flyway version "5"→"6" sau V6. Không chạy service với DB/broker dev (tránh migrate `trip_db` dev). Chưa commit.
+
+## Lượt 2026-10-25 — T17 Driver đọc offer — DONE
+
+Chi tiết: [T17](tasks/T17.md). Dependency T11, T16 DONE (theo backlog; T14–T16 do người dùng làm, chưa commit, test của chúng pass trong full build bên dưới).
+
+### Việc đã làm
+- `GET /api/drivers/me/offer`: `ReservationRepository.findCurrentOffer` (fencing qua `current_reservation_id`, RESERVED, `expires_at > clock_timestamp()`), `DriverService.currentOffer`, controller trả literal JSON `null` khi không có offer, 404 khi chưa có profile.
+- Contract §3.2 chốt thêm; OpenAPI thêm path + schema `Offer` và sửa lỗi cú pháp YAML có sẵn (header `Location`) — `swagger-cli validate` OK.
+- `DriverOfferIntegrationTest` 8 test.
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/driver-service -am clean verify` | driver **118/0** (`DriverOfferIntegrationTest` 8/8) |
+| `./mvnw -B clean verify` toàn repo | **267 tests / 0 failures** (identity 38, driver 118, trip 77, matching 23, payment 11); 0 lỗi scheduled task |
+| identity + driver jar, PostgreSQL tạm, request qua Nginx :8080 | chưa profile 404 → AVAILABLE `null` (200, `application/json`) → sau reserve: offer khớp `tripId`/`expiresAt` của lệnh reserve |
+
+Docker Desktop tắt lúc bắt đầu chạy test (Testcontainers báo không có Docker) — đã bật lại rồi chạy. Không dùng DB dev. Chưa commit.
+
+## Lượt 2026-10-25 — T18, T19, T20 (accept / reject / cancel) — DONE
+
+Người dùng chỉ định ba task; làm tuần tự, mỗi task chạy test xong mới sang task sau. Chi tiết: [T18](tasks/T18.md), [T19](tasks/T19.md), [T20](tasks/T20.md).
+
+### Việc đã làm
+- `TripCommandService` (mới): accept / reject / cancel theo mẫu Tx1 khóa row saga ghi intent → HTTP tới driver-service ngoài transaction (commandId tất định; confirm v2, release v3; timeout/5xx → GET reconcile) → Tx2 ghi kết quả.
+- `DriverReservationClient`: `confirm`, `release`, `getState`. `SagaRepository`: `lockByTripId`, `updateLocked`, `recordPendingError`, `isPastDeadline`. `TripRepository`: các chuyển trạng thái CAS trả version.
+- Sửa T16 (tối thiểu, cần cho T19/T20): giữ `excludedDriverIds` khi offer; giới hạn candidate theo `app.trip.max-candidates`.
+- `POST /api/trips/*/cancel` chỉ PASSENGER. Exception `STATE_CONFLICT`, `NOT_OFFERED_DRIVER`.
+- Test: `StatefulDriverStub` (driver-service giả lập có trạng thái theo contract §4.2), `TripCommandTestSupport`, `TripAcceptIntegrationTest` 7, `TripRejectIntegrationTest` 9, `TripCancelIntegrationTest` 8.
+- Docs: contract §3.3/§4.1 chốt T18–T20, state-machines, OpenAPI (validate OK).
+- Chuẩn hóa line ending LF cho các file Java của trip-service có CRLF.
+
+### Kiểm chứng thật
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service -am clean verify` sau T18 / T19 | 84/0 / 93/0 |
+| C02 `concurrentAcceptAndCancelHaveExactlyOneWinner` (20 vòng, jitter) × 4 lần | accept thắng 11/6/10/9, cancel thắng 9/14/10/11; mọi vòng đúng bất biến |
+| `./mvnw -B clean verify` toàn repo | **291 tests / 0 failures** (identity 38, driver 118, trip 101, matching 23, payment 11); 0 lỗi scheduled task |
+| 4 service jar thật + PostgreSQL/RabbitMQ tạm, request qua Nginx :8080 | accept (D1 BUSY), sai driver → NOT_OFFERED_DRIVER, hủy sau ACCEPTED → 409; reject → D2 AVAILABLE ngay, không bị đề nghị lại, NO_DRIVER ở attempt 3; hủy khi offered → 202 CANCELLED, D2 AVAILABLE; hủy khi SEARCHING → 200 + 5 tombstone; cuối cùng 0 reservation RESERVED, 0 log ERROR |
+
+Không dùng DB/broker dev. Chưa commit.
+
+## Lượt 2026-10-26 — Review và sửa T15 (matching) + T16 (trip nhận proposal)
+
+Chi tiết từng lỗi, cách sửa và test: [T15](tasks/T15.md) và [T16](tasks/T16.md), mục "Sửa sau review".
+
+- **T15:** M1 candidates API nhận `excludeDriverIds`, lọc trong SQL trước LIMIT (driver-service + matching client; contract §4.2, OpenAPI); M2 khóa advisory theo trip cho stale guard; M3 cùng attempt khác eventId → bỏ qua thay vì DLQ; M4 listener (matching + trip) dùng correlationId của envelope.
+- **T16:** T1 `MATCHING_RETRY_DELAY_MS` áp dụng thật qua outbox `next_attempt_at`; T2 deadline theo đồng hồ DB, kiểm tra trước khi reserve; T4 trip lọc lại excluded; T5 log qua `AuditLog`.
+- Chuẩn hóa LF cho file matching-service có CRLF.
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/driver-service,src/matching-service,src/trip-service -am clean verify` | driver **120/0**, matching **26/0**, trip **103/0** |
+| `./mvnw -B -pl src/identity-service clean verify` | 38/0 |
+| `swagger-cli validate docs/openapi.yaml` | valid |
+
+**Phát hiện ngoài phạm vi (chưa sửa):** báo cáo test identity lúc 00:07 ngày 26/10 (một lần chạy với log DEBUG bật từ bên ngoài) cho thấy `RequestResponseBodyMethodProcessor` ở mức DEBUG ghi nguyên body request, **gồm cả mật khẩu** (`RegisterRequest[... password=...]`); test `registerLoginFlowLogsContainNoSecrets` đã bắt được. Cấu hình mặc định (INFO) không bị. Nên tách task: che `password` trong `toString()` của `RegisterRequest`/`LoginRequest` và/hoặc chặn DEBUG cho logger đó.
+
+Chưa commit.
+
+## Lượt 2026-10-26 — T21: Timeout và restart Saga (trip-service) — DONE
+
+Chi tiết: [T21](tasks/T21.md).
+
+### Việc đã làm
+- `SagaRecoveryWorker` (mới): @Scheduled quét saga chưa terminal có việc pending (`findActionableDue`), claim bằng transaction ngắn (`FOR UPDATE` + CAS version + `lease_owner` + re-arm `next_retry_at = now + lease`), thực thi intent ngoài khóa DB; lỗi một row không dừng cả lô.
+- 4 đường xử lý: offer TTL hết hạn → release `OFFER_EXPIRED` → tìm lại/NO_DRIVER; deadline tổng WAITING_MATCH → tombstone mọi reservationId tất định của attempt → NO_DRIVER + ABORTED (late reserve nhận 409, không hồi sinh); intent CONFIRMING/COMPENSATING treo → resume idempotent (commandId tất định, driver dedup §4.1).
+- `V7__saga_worker_lease.sql`: cột `sagas.lease_owner`. `TripInboxHandler` lưu một `offerExpiresAt` duy nhất mỗi lượt vào saga context; `deterministicReservationId` public static.
+- Test mới: `TripSagaRecoveryIntegrationTest` 7 (offer expiry, deadline tombstone + late reserve, CONFIRMED không bị TTL release, resume confirm/reject/cancel) và `TripSagaRestartIntegrationTest` 1 (hai application context thật trên một PG, broker cố tình vắng mặt: intent CONFIRMING treo sống qua restart → ACCEPTED; COMPENSATING/REJECT treo → SEARCHING attempt 2 + outbox PENDING).
+- Tắt worker schedule trong test fault-injection (`app.saga.worker-interval-ms=3600000` ở `TripCommandTestSupport`) — tick 1 s có thể claim intent treo giữa commit intent và HTTP call, tiêu thụ fault flag trước request.
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service clean verify` | **111/0** (recovery 7/0, restart 1/0; test T18–T20 xanh trở lại) |
+| `./mvnw -B clean verify` toàn repo | **306 tests / 0 failures** (identity 38, driver 120, trip 111, matching 26, payment 11) |
+
+Không dùng DB/broker dev. Chưa commit. T22 mở khóa (dep T18 + T21).
+
+## Lượt 2026-10-26 — T22: Start/complete và finish driver (trip-service) — DONE
+
+Chi tiết: [T22](tasks/T22.md).
+
+### Việc đã làm
+- `TripCommandService`: `start` (guard ACCEPTED + assigned driver, CAS IN_PROGRESS + trip_event TRIP_STARTED); `complete` = Tx1 {COMPLETED + payment PENDING/attempt 1 + TRIP_COMPLETED + outbox TripCompleted `{tripId, attempt:1, amountVnd=fare_vnd, currency:"VND"}` causation NULL + intent bền AWAITING_FINISH/FINISH_ASSIGNMENT} → ngoài tx gọi finish driver (commandVersion 4, commandId tất định theo reservation) — thành công = saga COMPLETED terminal, chưa rõ = pending cho worker; `resumePendingFinish` cho worker.
+- `TripRepository.markInProgress/markCompleted`; `DriverReservationClient.finish`; `SagaRepository.findActionableDue` + `SagaRecoveryWorker` xử lý phase AWAITING_FINISH; exception mới 409 NOT_ASSIGNED_DRIVER; controller POST start/complete (role DRIVER đã enforce ở T07).
+- Test: `TripStartCompleteIntegrationTest` 6 test (happy path, guard sai driver/sai state, lặp không phát intent mới, finish fault → worker resume với đúng 2 lần POST finish); `StatefulDriverStub` thêm action `finish` theo contract §4.2 + fault injection.
+- Docs: api-contracts.md §3.3/§4.2 "Chốt T22" (commandVersion finish = 4, hành vi lặp, intent bền).
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service clean verify` | **117/0** (TripStartCompleteIntegrationTest 6/0) |
+| `./mvnw -B clean verify` toàn repo | **BUILD SUCCESS — 312 tests / 0 failures** (identity 38, driver 120, trip 117, matching 26, payment 11) |
+
+Không dùng DB/broker dev. Chưa commit. T23 mở khóa (dep T13 + T14 + T22 — cả ba DONE).
+
+## Lượt 2026-10-27 — T23: Payment consumer (payment-service) — DONE
+
+Chi tiết: [T23](tasks/T23.md).
+
+### Việc đã làm
+- **Migrations:** V2 `inbox_events` (dedup unique `(consumer_name, event_id)`); V3 `payments` (`unique(trip_id, attempt)`, status `SUCCEEDED`/`FAILED`, `failure_code`, cột traceability `event_id`/`correlation_id`) + `outbox` producer payment-service (`event_type CHECK IN ('PaymentSucceeded','PaymentFailed')`).
+- **Inbox:** `RabbitTopologyConfig` declare `payment.inbox` (DLX rk `payment.dlq`) bind `trip.completed`; `InboxMessageValidator` (TripCompleted only; amount/currency/aggregateId validation); listener manual ACK sau commit, retry bounded 3 + backoff env, hết lượt → DLQ (`x-death` only); malformed/unsupported → republish chủ động kèm `x-dlq-reason`.
+- **Nghiệp vụ:** `TripCompletedHandler` — duplicate business-intent guard (SELECT payments trip+attempt → skip+ACK), thu tiền giả lập `PaymentSimulator` (`PAYMENT_SIMULATE_FAIL_RATE`, default 0) → payments row status cuối + outbox PENDING trong cùng transaction; causationId = eventId TripCompleted, aggregateVersion bỏ khỏi envelope.
+- **Outbox:** worker publish persistent + mandatory + confirms (mẫu T13), producer `'payment-service'`.
+- Test: `PaymentConsumerIntegrationTest` 7 test trên PG+RabbitMQ thật (testcontainers pinned) + `FaultInjectionConfig` bọc handler thật; `SecuritySmokeTest` cập nhật sang mẫu matching T14 (H2 in-memory).
+- Docs: state-machines.md §5 thêm mục "Chốt T23" (payments không có row PENDING trung gian).
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/payment-service clean verify` | **18/0** (PaymentConsumerIntegrationTest 7/0; SecuritySmokeTest 5/0; JsonLogLayoutTest 6/0) |
+| `./mvnw -B clean verify` toàn repo | **BUILD SUCCESS — 319 tests / 0 failures** (identity 38, driver 120, trip 117, matching 26, payment 18) |
+
+Không dùng DB/broker dev. Chưa commit. T24 mở khóa (dep T23 DONE).
+
+## Lượt 2026-10-27 — T24: Trip nhận payment result (trip-service) — DONE
+
+Chi tiết: [T24](tasks/T24.md).
+
+### Việc đã làm
+- **Inbox:** `InboxMessageValidator` mở rộng `HANDLED_EVENT_TYPES += PaymentSucceeded, PaymentFailed` + 2 records payload mới theo events.md §3.5/§3.6 (`PaymentSucceededPayload {tripId, paymentId, attempt, amountVnd}`, `PaymentFailedPayload {tripId, paymentId, attempt, reason}`); validation: `tripId == aggregateId`, `paymentId` UUID, `attempt ≥ 1`, `amountVnd` nguyên >0 vừa long (guard double overflow), `reason` non-blank free string. Listener T16 không đổi.
+- **Nghiệp vụ:** `TripInboxHandler.handlePaymentResult` — guard state COMPLETED + `payment_attempt == attempt` + `payment_status PENDING` (§4.4); CAS `markPaymentResult` (PENDING → SUCCEEDED/FAILED, `trips.version+1`) + trip_event `PAYMENT_SUCCEEDED/PAYMENT_FAILED` tại version mới trong cùng transaction listener; stale/duplicate → audit log + skip ACK (không DLQ); CAS fail → rollback + retry bounded.
+- Test: `TripPaymentResultIntegrationTest` 6 test trên PG+RabbitMQ thật — publish PaymentSucceeded/PaymentFailed qua exchange `ride.events` rk `payment.succeeded`/`payment.failed` (đường đi thật của outbox payment-service); fault injection nested `FaultInjectionConfig` (`@Primary InboxEventHandler` bọc handler thật, backoff 100/200/400 ms).
+- Docs: state-machines.md §5 thêm mục "Chốt T24".
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service clean verify` | **123/0** (TripPaymentResultIntegrationTest 6/0 trên PG+RabbitMQ thật ~51 s) |
+| `./mvnw -B clean verify` toàn repo | **BUILD SUCCESS — 325 tests / 0 failures** (identity 38, driver 120, trip 123, matching 26, payment 18) |
+
+Không dùng DB/broker dev. Chưa commit. T25 mở khóa (dep T19 + T20 + T22 + T24 — cả bốn DONE).

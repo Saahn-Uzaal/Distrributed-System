@@ -110,6 +110,23 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.CONFLICT, "ACTIVE_TRIP_EXISTS", e.getMessage(), e.details(), req);
     }
 
+    // T18–T20 — chuyển trạng thái sai / driver không phải người được offer (contract §1.2)
+    @ExceptionHandler(StateConflictException.class)
+    public ResponseEntity<ApiError> stateConflict(StateConflictException e, HttpServletRequest req) {
+        return build(HttpStatus.CONFLICT, "STATE_CONFLICT", e.getMessage(), e.details(), req);
+    }
+
+    @ExceptionHandler(NotOfferedDriverException.class)
+    public ResponseEntity<ApiError> notOfferedDriver(NotOfferedDriverException e, HttpServletRequest req) {
+        return build(HttpStatus.CONFLICT, "NOT_OFFERED_DRIVER", e.getMessage(), e.details(), req);
+    }
+
+    // T22 — start/complete bởi driver không phải người được assign (contract §1.2/§3.3)
+    @ExceptionHandler(NotAssignedDriverException.class)
+    public ResponseEntity<ApiError> notAssignedDriver(NotAssignedDriverException e, HttpServletRequest req) {
+        return build(HttpStatus.CONFLICT, "NOT_ASSIGNED_DRIVER", e.getMessage(), e.details(), req);
+    }
+
     @ExceptionHandler(TripNotFoundException.class)
     public ResponseEntity<ApiError> tripNotFound(TripNotFoundException e, HttpServletRequest req) {
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", e.getMessage(), null, req);

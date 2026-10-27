@@ -13,14 +13,14 @@ Prototype hệ thống đặt xe mô phỏng Grab/Uber cho môn Distributed Syst
 | API | Spring Web MVC (starter `spring-boot-starter-webmvc`) + validation |
 | Persistence | PostgreSQL + Flyway; **JdbcTemplate** ở driver/trip/matching/payment, chỉ identity-service dùng JPA — xem mục "Lệch đặc tả có chủ đích" |
 | Security | Spring Security mới dùng phần crypto (BCrypt) + JWT filter tự viết (nimbus-jose-jwt); chưa dùng authorization model đầy đủ của Spring Security |
-| Messaging | RabbitMQ: hạ tầng sẵn sàng (compose + declare topology từ T04), **chưa có `spring-boot-starter-amqp` trong POM** — publisher/consumer worker thuộc T13/T14 |
+| Messaging | RabbitMQ + Spring AMQP. **trip-service** đã publish qua outbox (T13: persistent, `mandatory`, publisher confirms). Consumer (inbox, retry, DLQ) thuộc T14; matching/payment chưa có AMQP |
 | Frontend | React + TypeScript + Vite + Ant Design (từ task T08) |
 | Deploy | Docker Compose + Nginx (từ task T29) |
 
 ### Lệch đặc tả có chủ đích
 
 - **JdbcTemplate thay JPA** (driver/trip/matching/payment): các thao tác quan trọng cần SQL tường minh và kiểm chứng được — CAS fencing trên `drivers.status` + `current_reservation_id`/`current_trip_id`, claim idempotency bằng `INSERT ... ON CONFLICT DO NOTHING` trong transaction, advisory lock theo passenger (`pg_advisory_xact_lock`), isolation `REPEATABLE READ` cho list. JPA sẽ che các bước này và khó audit hơn. identity-service dùng JPA vì chỉ là CRUD user đơn giản.
-- **RabbitMQ chưa có client AMQP**: topology (exchange/queue/DLX) đã declare sẵn từ T04, nhưng service chưa phát/nhận message — outbox pattern ghi ý định vào DB; worker publish/consume thuộc T13/T14. Khi đó mới thêm `spring-boot-starter-amqp`.
+- **RabbitMQ mới có phía publish**: trip-service có `spring-boot-starter-amqp` và outbox worker (T13); chưa service nào consume — inbox/retry/DLQ thuộc T14, matching consume ở T15.
 - **Spring Security crypto-only**: verify JWT tự viết (RS256 + allowlist alg + iss/aud) và BCrypt cho password — đủ cho MVP, không cần security model đầy đủ.
 
 ## Modules & ports nội bộ
@@ -119,7 +119,7 @@ Integration tests dùng Testcontainers — **Docker daemon phải đang chạy**
 
 T11 bổ sung `RESERVATION_EXPIRY_ENABLED=true` và `RESERVATION_EXPIRY_FIXED_DELAY_MS=1000` cho driver-service (env của tiến trình Java local). Worker scan tối đa 100 RESERVED quá hạn mỗi lượt, không expire CONFIRMED. Confirm/release/finish là API nội bộ có X-Internal-Token; không proxy qua Nginx.
 
-Migration mới: Driver V4 giữ replay RESERVE cũ và hỗ trợ tombstone thiếu metadata; Trip V3 scope idempotency theo principal/operation/key, thêm driver_user_id để phân quyền bằng JWT sub. Không sửa migration cũ. Dữ liệu Trip được gán thủ công thiếu identity hoặc replay không truy được trip cần sửa rõ owner trước khi migrate; dữ liệu hợp lệ do T12 tạo được nâng cấp tự động. T16 sẽ lưu cả driver_id/profile và driver_user_id/identity từ proposal; hiện chưa có assignment handler.
+Migration mới: Driver V4 giữ replay RESERVE cũ và hỗ trợ tombstone thiếu metadata; Trip V3 scope idempotency theo principal/operation/key, thêm driver_user_id để phân quyền bằng JWT sub. Không sửa migration cũ. Dữ liệu Trip được gán thủ công thiếu identity hoặc replay không truy được trip cần sửa rõ owner trước khi migrate; dữ liệu hợp lệ do T12 tạo được nâng cấp tự động. Từ T16, trip-service ghi `trips.driver_id`/`driver_user_id` + `reservation_id` khi `DRIVER_OFFERED` (chốt N22: assignment hiệu lực chỉ từ ACCEPTED — endpoint accept thuộc T18).
 
 ### 5. Khởi động identity-service (ví dụ) và kiểm tra health
 ```bash
@@ -135,7 +135,7 @@ export IDENTITY_DB_PASSWORD
 JWT_PRIVATE_KEY_PATH=keys/jwt-private.pem java -jar src/identity-service/target/identity-service-0.1.0.jar
 ```
 
-Từ T07: driver-service và trip-service verify JWT bằng public key — chạy local cần set env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (cả hai); driver-service thêm `INTERNAL_API_TOKEN` cho internal API (`X-Internal-Token`). Mỗi service cần đúng biến mật khẩu DB của mình (`IDENTITY_DB_PASSWORD`, `DRIVER_DB_PASSWORD`, `TRIP_DB_PASSWORD`, `MATCHING_DB_PASSWORD`, `PAYMENT_DB_PASSWORD`) — thiếu thì service dừng với thông báo nêu tên biến (N09).
+Từ T07: driver-service và trip-service verify JWT bằng public key — chạy local cần set env tiến trình `JWT_PUBLIC_KEY_PATH=keys/jwt-public.pem` (cả hai); driver-service thêm `INTERNAL_API_TOKEN` cho internal API (`X-Internal-Token`). Mỗi service cần đúng biến mật khẩu DB của mình (`IDENTITY_DB_PASSWORD`, `DRIVER_DB_PASSWORD`, `TRIP_DB_PASSWORD`, `MATCHING_DB_PASSWORD`, `PAYMENT_DB_PASSWORD`) — thiếu thì service dừng với thông báo nêu tên biến (N09). Từ T13, trip-service publish event lên RabbitMQ nên cần thêm `RABBITMQ_PASSWORD` (cùng quy tắc N09, không có giá trị mặc định); `RABBITMQ_USER` mặc định `ridehailing_dev`, `RABBITMQ_HOST`/`RABBITMQ_AMQP_PORT` mặc định `localhost:5672`. Broker tắt thì trip-service vẫn chạy, event nằm ở trạng thái PENDING trong bảng `outbox` và được gửi khi broker lên lại. Từ T14, matching-service cũng là consumer RabbitMQ (inbox `matching.inbox`) nên cần thêm `RABBITMQ_PASSWORD`; broker tắt thì matching-service vẫn khởi động — listener tự retry kết nối ở nền và event được xử lý khi broker lên lại. Từ T15, matching-service gọi candidates API driver-service (internal) nên chạy local cần thêm `DRIVER_SERVICE_URL` (mặc định `http://localhost:8082`) và `INTERNAL_API_TOKEN` (**không có giá trị mặc định** — thiếu thì service dừng ngay với thông báo nêu tên biến, cùng quy tắc N09). Từ T16, trip-service consume `DriverProposed`/`NoDriverFound` từ queue `trip.inbox` và gọi reserve API driver-service (internal) nên chạy local cũng cần thêm `DRIVER_SERVICE_URL` + `INTERNAL_API_TOKEN` (cùng quy tắc N09); broker tắt thì trip-service vẫn khởi động — event nằm trong bảng `inbox_events`/outbox PENDING và được xử lý khi broker lên lại.
 
 Không in secret (mật khẩu, key) ra console khi minh họa.
 

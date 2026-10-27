@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * T09 — internal API candidates (contract api-contracts.md §4.2). Credential X-Internal-Token
@@ -29,7 +30,11 @@ public class InternalDriverController {
     public CandidatesResponse candidates(@RequestParam double lat,
                                          @RequestParam double lng,
                                          @RequestParam(defaultValue = "5000") int radiusM,
-                                         @RequestParam(defaultValue = "5") int limit) {
-        return new CandidatesResponse(service.findCandidates(lat, lng, radiusM, limit));
+                                         @RequestParam(defaultValue = "5") int limit,
+                                         // T15 fix (M1): loại driver TRƯỚC khi áp limit — nếu matching lọc sau,
+                                         // driver bị loại chiếm chỗ trong top-N và đẩy driver rảnh khác ra ngoài.
+                                         @RequestParam(required = false) List<UUID> excludeDriverIds) {
+        return new CandidatesResponse(service.findCandidates(lat, lng, radiusM, limit,
+                excludeDriverIds == null ? List.of() : excludeDriverIds));
     }
 }

@@ -8,7 +8,10 @@ import com.ridehailing.driver.web.dto.AvailabilityRequest;
 import com.ridehailing.driver.web.dto.LocationRequest;
 import com.ridehailing.driver.web.dto.ProfileRequest;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import tools.jackson.databind.node.NullNode;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -54,6 +57,19 @@ public class DriverController {
         Double latitude = body == null ? null : body.latitude();
         Double longitude = body == null ? null : body.longitude();
         return service.updateLocation(user.userId(), latitude, longitude);
+    }
+
+    /**
+     * T17 — offer hiện tại (contract §3.2). Có offer -> 200 + object; không có -> 200 với body JSON
+     * {@code null} (contract chốt không dùng 404 cho trường hợp này). Driver chưa có profile -> 404.
+     */
+    @GetMapping("/offer")
+    public ResponseEntity<Object> currentOffer(HttpServletRequest req) {
+        AuthenticatedUser user = principal(req);
+        Object body = service.currentOffer(user.userId())
+                .<Object>map(offer -> offer)
+                .orElse(NullNode.getInstance()); // serialize thành literal JSON null
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
     private static AuthenticatedUser principal(HttpServletRequest req) {

@@ -41,10 +41,19 @@ public class DriverService {
     public record LocationResult(UUID driverId, Instant lastSeenAt) {
     }
 
+    /** T17 — GET /api/drivers/me/offer (contract §3.2): dữ liệu chuyến lấy từ reservation local. */
+    public record Offer(UUID tripId, int attempt, Point pickup, Point destination,
+                        long distanceM, long fareVnd, Instant expiresAt) {
+        public record Point(double latitude, double longitude) {
+        }
+    }
+
     public record Candidate(UUID driverId, UUID driverUserId, long distanceM) {
     }
 
     private static final int MAX_CANDIDATES = 5;
+    /** Giới hạn độ dài danh sách loại trừ trong query string (đủ cho MAX_MATCHING_ATTEMPTS lượt từ chối). */
+    static final int MAX_EXCLUDED = 50;
 
     /** N11 — audit log: driver_availability_changed; không ghi secret. */
     private static final Logger log = LoggerFactory.getLogger(DriverService.class);
@@ -138,8 +147,32 @@ public class DriverService {
         return new LocationResult(driver.id(), updated.get());
     }
 
+    /**
+     * T17 — offer hiện tại của driver đang đăng nhập (userId lấy từ JWT, không tin client).
+     * Chưa có profile -> 404 NOT_FOUND (giống availability/location); có profile nhưng không có offer
+     * còn hiệu lực -> Optional.empty() (controller trả 200 body null theo contract).
+     * Chỉ đọc: không đổi heartbeat hay state.
+     */
+    public java.util.Optional<Offer> currentOffer(UUID userId) {
+        DriverRepository.DriverRow driver = repo.findByUserId(userId)
+                .orElseThrow(() -> new NotFoundException("Driver profile not found."));
+        return reservationRepo.findCurrentOffer(driver.id()).map(r -> new Offer(
+                r.tripId(), r.attempt(),
+                new Offer.Point(r.pickupLat(), r.pickupLng()),
+                new Offer.Point(r.destinationLat(), r.destinationLng()),
+                r.distanceM(), r.fareVnd(), r.expiresAt()));
+    }
+
     /** GET /internal/drivers/candidates — AVAILABLE + heartbeat mới, deterministic order. */
     public List<Candidate> findCandidates(double lat, double lng, int radiusM, int limit) {
+        return findCandidates(lat, lng, radiusM, limit, List.of());
+    }
+
+    /** T15 fix (M1): {@code excludeDriverIds} (driverId profile) bị loại trong SQL, trước LIMIT. */
+    public List<Candidate> findCandidates(double lat, double lng, int radiusM, int limit, List<UUID> excludeDriverIds) {
+        if (excludeDriverIds.size() > MAX_EXCLUDED) {
+            throw new InvalidInputException("excludeDriverIds must contain at most " + MAX_EXCLUDED + " ids.");
+        }
         validateCoordinates(lat, lng);
         if (radiusM <= 0 || !Double.isFinite((double) radiusM)) {
             throw new InvalidInputException("radiusM must be a positive number.");
@@ -153,7 +186,7 @@ public class DriverService {
         // trong chính câu SQL (cùng nguồn đồng hồ với CAS reserve — T10-1/R04).
         int fetchLimit = Math.max(capped * 4, 20);
         List<DriverRepository.DriverRow> rows = repo.findCandidatesInBox(lat, lng, radiusM,
-                heartbeatStaleAfterMs, fetchLimit);
+                heartbeatStaleAfterMs, fetchLimit, excludeDriverIds);
         List<Candidate> candidates = new ArrayList<>();
         for (DriverRepository.DriverRow row : rows) {
             long distanceM = Haversine.meters(lat, lng, row.latitude(), row.longitude());

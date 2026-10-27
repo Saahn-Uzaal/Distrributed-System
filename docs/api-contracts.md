@@ -163,6 +163,12 @@ Trả đề nghị hiện tại của driver này, **dữ liệu lấy từ rese
 }
 ```
 - **200** không có offer: body `null` (không dùng 404)
+- **Chốt T17 (2026-10-25):**
+  - "Offer hiện tại" = reservation là `current_reservation_id` của chính driver gọi API, driver đang `RESERVED`, reservation thuộc driver đó, state `RESERVED` và `expires_at > clock_timestamp()` (đồng hồ DB, cùng nguồn với expiry worker và confirm). Mọi trường hợp khác trả `null`: chưa được đề nghị, đã release/expire (kể cả khi worker chưa kịp chuyển row sang EXPIRED), hoặc đã `CONFIRMED` (đã nhận chuyến — xem chuyến qua `GET /api/trips/{id}`).
+  - Body `null` là literal JSON `null` với `Content-Type: application/json`, không phải body rỗng.
+  - Driver chưa có profile → 404 `NOT_FOUND` (giống availability/location).
+  - `expiresAt` là đúng giá trị Trip gửi trong lệnh reserve, ISO-8601 UTC. Client nên đếm ngược theo giá trị này; server vẫn là nguồn quyết định khi accept (T18).
+  - Chỉ đọc: không cập nhật heartbeat, state hay version của driver.
 
 ### 3.3. trip-service — `/api/trips`
 
@@ -229,6 +235,14 @@ Không có body. Chốt hai nhánh:
 - Chưa có reservation hoạt động/đang xử lý (state `SEARCHING`, saga không pending reserve): **200** `{"tripId":"...","state":"CANCELLED"}` — saga ABORTED ngay. **Không publish event "hủy matching"** (event này không tồn tại trong catalog — chốt F31); event `DriverProposed`/`NoDriverFound` attempt cũ tới sau đó bị bỏ qua: ACK + log theo events.md §4.4.
 - Có reservation pending/hoạt động (`DRIVER_OFFERED` hoặc đang RESERVING): **202** `{"tripId":"...","state":"CANCELLING"}` — saga phase `COMPENSATING`, worker release rồi mới chuyển `CANCELLED`; client poll `GET /trips/{id}`.
 - Sau khi accept thắng (`ACCEPTED`/`IN_PROGRESS`/`COMPLETED`) hoặc đã terminal: 409 `STATE_CONFLICT`.
+- **Chốt T20 (2026-10-25):**
+  - Mọi nhánh đều đi qua `CANCELLING` và chỉ thành `CANCELLED` sau khi mọi reservation liên quan đã terminal phía Driver (release reason `CANCELLED`) — không bao giờ "CANCELLED rồi bỏ quên driver".
+  - **SEARCHING:** listener T16 có thể đang reserve dở mà saga chưa thể hiện. Trip release (tạo tombstone) cho **mọi** reservationId tất định của attempt hiện tại, `UUID v3("RESERVE|<tripId>|<attempt>|<index>")` với index `0..MATCHING_MAX_CANDIDATES-1`; reserve tới trễ nhận `TOMBSTONED_RESERVATION`, reservation đã tạo thì được giải phóng. Trip chỉ thử tối đa `MATCHING_MAX_CANDIDATES` candidate để tập này luôn đủ. Release xong inline → **200** `CANCELLED`.
+  - **DRIVER_OFFERED** (saga WAITING_DRIVER): release reservation đang offer; xong inline → **202** `CANCELLED`; chưa rõ → **202** `CANCELLING` (gọi lại cancel để tiếp tục; worker tự động là T21).
+  - Driver đang accept (saga CONFIRMING) hoặc đang reject (saga COMPENSATING) → 409 `STATE_CONFLICT`. Accept/reject/cancel phân xử bằng khóa row saga: chỉ một intent thắng.
+  - Đã `CANCELLED` → **200** `CANCELLED` (idempotent). `NO_DRIVER`/`COMPLETED` → 409.
+  - Chỉ role PASSENGER (403 nếu khác); passenger không phải owner → 404 (không lộ trip người khác).
+  - Sau khi hủy, `driver_id`/`driver_user_id` về NULL; trip_event `CANCELLING` → (`RESERVATION_RELEASED`) → `TRIP_CANCELLED`.
 
 #### POST /api/trips/{id}/accept (chỉ offered driver)
 Request: `{"attempt":1}` — phải khớp attempt của offer hiện tại.
@@ -236,21 +250,33 @@ Request: `{"attempt":1}` — phải khớp attempt của offer hiện tại.
 - Caller role không phải DRIVER: 403 `FORBIDDEN`.
 - Driver khác với người được offer cho trip+attempt đó: 409 `NOT_OFFERED_DRIVER`.
 - Offer đã hết hạn/đã release: 409 `STATE_CONFLICT` (details: state).
+- **Chốt T18 (2026-10-25):**
+  - Trip ghi intent ACCEPT (saga WAITING_DRIVER → CONFIRMING) trong transaction khóa row saga, rồi mới gọi confirm (version 2, commandId `UUID v3("CMD-CONFIRM|<reservationId>")`) ngoài transaction. ACCEPTED chỉ được ghi sau khi Driver xác nhận; saga chuyển `AWAITING_FINISH` (desired `NONE`) chờ complete (T22).
+  - Timeout/5xx khi confirm → GET reservation: CONFIRMED khớp → ACCEPTED; vẫn RESERVED → gửi lại confirm một lần cùng commandId; vẫn không rõ → 202 `DRIVER_OFFERED`, intent giữ trong saga; gọi accept lại để tiếp tục. Không bao giờ ghi ACCEPTED khi chưa thấy CONFIRMED.
+  - Driver trả 4xx (offer hết hạn/đã release) → 409 `STATE_CONFLICT`, `details.reservationState`; saga về WAITING_DRIVER, trip giữ DRIVER_OFFERED (chuyển SEARCHING khi offer hết hạn là T21).
+  - Accept lại sau ACCEPTED (cùng driver + attempt) → 202 `ACCEPTED`, không gọi Driver. Thiếu `attempt` → 400; trip không tồn tại → 404.
 
 #### POST /api/trips/{id}/reject (chỉ offered driver)
 Request: `{"attempt":1}`.
 - **202** `{"tripId":"...","state":"SEARCHING","matchingAttempt":2}` — release reservation, tăng attempt, thêm driver vào excluded list; nếu đã hết số lần đề nghị tối đa → `"state":"NO_DRIVER"`.
 - 409 `NOT_OFFERED_DRIVER` / `STATE_CONFLICT` như accept.
+- **Chốt T19 (2026-10-25):**
+  - Intent REJECT (saga → COMPENSATING) → release reason `REJECTED` (version 3, commandId `UUID v3("CMD-RELEASE|<reservationId>|<reason>")`). Chỉ khi Driver trả `RELEASED` hoặc `EXPIRED` mới: attempt+1, `excludedDriverIds += driverId`, outbox `TripRequested` attempt mới (phát ngay, không chờ `MATCHING_RETRY_DELAY_MS`), trip_event `OFFER_REJECTED` + `RESERVATION_RELEASED`.
+  - `attempt >= MAX_MATCHING_ATTEMPTS` hoặc quá deadline → `NO_DRIVER` (+ trip_event `NO_DRIVER`), saga ABORTED.
+  - Release chưa rõ → 202 `{"state":"DRIVER_OFFERED","matchingAttempt":n}`, **không** phát TripRequested; gọi lại reject để tiếp tục.
+  - `excludedDriverIds` tích lũy qua các lượt; reject lặp lại cho attempt vừa từ chối → trả state hiện tại (idempotent).
 
 #### POST /api/trips/{id}/start (chỉ assigned driver)
 Không body. State phải là `ACCEPTED`.
 - **200** `{"tripId":"...","state":"IN_PROGRESS"}`
 - 403 role sai · 409 `NOT_ASSIGNED_DRIVER` · 409 `STATE_CONFLICT` (state khác ACCEPTED, kể cả sau CANCELLED — invariant 5)
+- **Chốt T22 (2026-10-26):** ghi trip_event `TRIP_STARTED`; saga giữ `AWAITING_FINISH` (desired `NONE`). Start lặp trên IN_PROGRESS → 409 `STATE_CONFLICT`.
 
 #### POST /api/trips/{id}/complete (chỉ assigned driver)
 Không body. State phải là `IN_PROGRESS`.
 - **200** `{"tripId":"...","state":"COMPLETED","paymentStatus":"PENDING"}` — publish `TripCompleted` qua outbox; saga chờ finish assignment.
 - 409 như start.
+- **Chốt T22 (2026-10-26):** Tx1 ghi COMPLETED + `payment_status=PENDING`, `payment_attempt=1`, trip_event `TRIP_COMPLETED`, outbox `TripCompleted` `{tripId, attempt:1, amountVnd=fare_vnd, currency:"VND"}` (causation null — HTTP-triggered; correlation = X-Correlation-ID của request) và intent finish bền (saga `AWAITING_FINISH` + desired `FINISH_ASSIGNMENT`). Ngoài tx gọi finish driver (commandVersion 4, commandId tất định theo reservation); thành công → saga COMPLETED terminal, chưa rõ → giữ pending cho worker resume. Response luôn 200 bất kể kết quả finish. Complete lặp trên COMPLETED → 409 `STATE_CONFLICT`, không phát outbox row mới / payment_attempt không đổi.
 
 ### 3.4. trip-service — `/api/notifications`
 
@@ -293,6 +319,7 @@ Mỗi command body mang:
 - **Chốt T10-5/T12-4 (R01) — canonical double trong hash:** mọi trường số float của payload được chuẩn hóa trước khi băm: `-0.0` → `"0.0"`; các giá trị khác giữ đúng `Double.toString`. Do đó latitude/longitude `0.0` và `-0.0` cùng hash (replay, không 409), và hash đã lưu cũ vẫn ổn định.
 - **Chốt T10 — thứ tự kiểm tra reserve:** (1) dedup commandId (replay/conflict) → (2) tombstone: reservation đã terminal (`RELEASED`/`EXPIRED`) → 409 `TOMBSTONED_RESERVATION` → (3) version check → (4) CAS driver. Replay được kiểm tra **trước** tombstone: retry command gốc sau release trả response đã lưu, Trip reconcile trạng thái thật bằng GET.
 - **Chốt T10-2/T10-3 (F10/N29):** `expiresAt` phải nằm trong `(now, now + OFFER_TTL_MAX]` (`OFFER_TTL_MAX = reservation.offer-ttl-max-ms`, default 120000 ms) — ngoài khoảng → 400 `INVALID_INPUT`. Kiểm tra chỉ áp dụng cho reservation **mới**; replay command cũ (kể cả `expiresAt` đã qua) vẫn trả response đã lưu theo §4.1. So sánh dùng cùng nguồn đồng hồ DB (`clock_timestamp()`).
+- **Chốt T18–T20 — commandVersion do Trip cấp:** reserve = 1, confirm = 2, release = 3 (finish = 4 ở T22). Confirm tới trễ sau release nhận `STALE_VERSION` nên không bao giờ tạo lại assignment đã hủy.
 - `commandVersion`: mỗi reservation có `last_command_version` (khởi tạo 0). Command được chấp nhận khi `commandVersion > last_command_version`; sau đó lưu giá trị lớn nhất. Ngược lại → 409 `STALE_VERSION`. Không dùng timestamp để suy luận thứ tự.
 - **Chốt N24 — release mọi reservationId bị bỏ:** Trip **phải** gửi `release` (tạo tombstone nếu release tới trước) cho mọi `reservationId` đã cấp mà không dùng nữa — kể cả sau khi nhận 409/timeout HTTP; chỉ coi cleanup xong khi có xác nhận terminal. Không tái dùng `commandId` cho thao tác khác; command lỗi (4xx/5xx/timeout) **không được lưu** để replay.
 
@@ -300,6 +327,7 @@ Mỗi command body mang:
 
 #### GET /internal/drivers/candidates
 Query: `lat`, `lng` (bắt buộc, hợp lệ), `radiusM` (default 5000; phải > 0), `limit` (mặc định 5; < 1 → 400; > 5 clamp về 5 — chốt T09).
+- **Chốt sửa T15 (2026-10-26):** tham số tùy chọn `excludeDriverIds` (danh sách driverId profile, phân cách bằng dấu phẩy, tối đa 50 → quá thì 400). Driver bị loại trừ được bỏ **trong SQL, trước** `ORDER BY … LIMIT`. Trước đây matching nhận top-5 rồi mới lọc phía mình, nên tài xế vừa từ chối (thường là người gần nhất) chiếm chỗ trong top-5 và có thể gây `NoDriverFound` dù vẫn còn tài xế rảnh ở xa hơn. Matching vẫn lọc lại phía mình, trip cũng lọc lại lần nữa (phòng thủ).
 - **200**
 ```json
 {"candidates":[{"driverId":"profile-uuid","driverUserId":"identity-user-uuid","distanceM":412}]}
@@ -346,8 +374,9 @@ Chuyển terminal `RELEASED` + `terminal_reason`; giải phóng driver → `AVAI
 - **Chốt T11-3 (N30):** release reservation `CONFIRMED` chỉ chấp nhận reason `CANCELLED`; `REJECTED`/`OFFER_EXPIRED` trên CONFIRMED → 409 `STATE_CONFLICT` (driver giữ BUSY). Release được phép bù trừ cả CONFIRMED. Driver BUSY phải khớp cả current_reservation_id và current_trip_id trước khi giải phóng. Row terminal giữ nguyên state/reason; command mới version cao hơn trả 200 state terminal hiện tại (EXPIRED giữ EXPIRED), nâng last_command_version. Retry cùng command replay trước version/state check.
 
 #### POST /internal/reservations/{id}/finish
-Body: `{"commandId":"uuid","commandVersion":3,"tripId":"uuid"}`
+Body: `{"commandId":"uuid","commandVersion":4,"tripId":"uuid"}`
 Sau khi trip COMPLETED: chỉ từ state `CONFIRMED` (khớp tripId) → terminal `RELEASED`, `terminal_reason=TRIP_COMPLETED`; giải phóng driver → `AVAILABLE` nếu `current_trip_id` khớp.
+- **Chốt T22 (2026-10-26):** commandVersion = 4; Trip gọi finish sau complete với commandId tất định `UUID v3("CMD-FINISH|<reservationId>")`; reconcile bằng GET — `RELEASED` khớp tripId coi là đã xong.
 - **200** `{"reservationId":"...","state":"RELEASED"}` (idempotent — retry sau crash an toàn)
 - Fence phải khớp cả current_reservation_id và current_trip_id; finish cũ không ảnh hưởng assignment mới. Row RELEASED/TRIP_COMPLETED cùng trip cho phép command mới version cao hơn trả 200 mà không giải phóng lại driver; terminal do lý do khác → 409 STATE_CONFLICT.
 - Confirm/finish chưa biết reservation → 404; sai state/identity hoặc fencing confirm → 409 STATE_CONFLICT. Release/finish cũng áp dụng STALE_VERSION/COMMAND_CONFLICT của §4.1.

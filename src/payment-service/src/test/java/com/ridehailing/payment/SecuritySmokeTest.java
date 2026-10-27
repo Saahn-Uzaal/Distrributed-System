@@ -17,26 +17,24 @@ import tools.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * T07 — smoke test payment-service trên HTTP thật (không cần DB: exclude flyway/jdbc).
- * payment-service không có REST API trong contract §3/§4 — nghiệm thu T07 ở đây là:
- * health mở không auth + mọi lỗi JSON mang correlationId (contract §1.1/§5).
+ * T07 — smoke test payment-service trên HTTP thật. T23 fix (pattern matching T14): inbox
+ * consumer phụ thuộc JdbcTemplate nên context cần DataSource — dùng H2 in-memory, flyway tắt;
+ * handler không chạy trong smoke (không có message). payment-service không có REST API trong
+ * contract §3/§4 — nghiệm thu T07 ở đây là: health mở không auth + mọi lỗi JSON mang correlationId.
  */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
-                // R04 fix: Boot 4 đã chuyển DataSourceAutoConfiguration sang
-                // org.springframework.boot.jdbc.autoconfigure — tên cũ bị bỏ qua im lặng,
-                // test vẫn kết nối DB dev. Flyway không auto-configure trong Boot 4;
-                // bean custom FlywayConfig tắt bằng app.flyway.enabled=false.
-                "spring.autoconfigure.exclude=" +
-                        "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
-                // N09: datasource bị exclude — dummy password để RequiredDbPasswordValidator không chặn.
+                // T23 fix: DataSource in-memory H2 — inbox consumer cần JdbcTemplate; flyway tắt
+                // nên không bảng nào được tạo, listener không chạm DB (pattern matching SecuritySmokeTest).
+                "spring.datasource.url=jdbc:h2:mem:payment_smoke;DB_CLOSE_DELAY=-1",
+                // N09: main yml không còn dev default password — dummy để RequiredDbPasswordValidator
+                // không chặn.
                 "spring.datasource.password=smoke_no_db",
-                "app.flyway.enabled=false",
-                // C06: production yml khai báo group.readiness.include=db, nhưng test này
-                // không có DataSource → không có contributor 'db' → Boot 4 validator fail.
-                // Override group thành rỗng để context load được; /actuator/health tổng thể vẫn hoạt động.
-                "management.endpoint.health.group.readiness.include="
+                // T23: RabbitMQ password không có default (N09) — smoke không kết nối broker
+                // (connection factory lazy); listener container tự retry ở nền, không fail startup.
+                "spring.rabbitmq.password=smoke_no_broker",
+                "app.flyway.enabled=false"
         })
 class SecuritySmokeTest {
 

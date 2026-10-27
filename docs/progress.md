@@ -791,3 +791,38 @@ Chi tiết: [T24](tasks/T24.md).
 | `./mvnw -B clean verify` toàn repo | **BUILD SUCCESS — 325 tests / 0 failures** (identity 38, driver 120, trip 123, matching 26, payment 18) |
 
 Không dùng DB/broker dev. Chưa commit. T25 mở khóa (dep T19 + T20 + T22 + T24 — cả bốn DONE).
+
+## Lượt 2026-10-27 — T25: Notifications và trip event history (trip-service) — DONE
+
+Chi tiết: [T25](tasks/T25.md).
+
+### Việc đã làm
+- **Schema:** `V8__notifications.sql` — bảng notifications theo spec + cột `version`, unique `(user_id, trip_id, version, type)` để dedup theo transition (một transition có thể notify 2 user nên key gồm `user_id`).
+- **API:** `GET /api/notifications` (mọi role xác thực, chỉ thông báo của caller, phân trang §1.3, sắp created_at DESC) + `GET /api/trips/{id}/events` (owner hoặc assigned driver, không thì 404 — §1.2; sắp version DESC).
+- **Ghi notification tại các transition đã có**, trong cùng transaction với trip_event: offer → passenger TRIP_OFFERED + driver OFFER_RECEIVED; accept/complete → cả hai; cancel → passenger luôn + driver nếu đã offer lúc hủy (row đọc trước NULL-out); NO_DRIVER (exhausted reject, deadline) và PAYMENT_* → chỉ passenger.
+- Test mới `TripNotificationIntegrationTest` 7 test trên PG+RabbitMQ thật; sửa cleanup 5 tệp test support (`DELETE FROM notifications` trước trips vì FK mới); `SecurityProbeTest` đổi probe sang path không handler + tạo bảng H2; assertion Flyway version `"8"` trong `TripIntegrationTest`.
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B -pl src/trip-service clean verify` | **154/0** (TripNotificationIntegrationTest 7/0 trên PG+RabbitMQ thật) |
+| `./mvnw -B clean verify` toàn repo | **BUILD SUCCESS — 371 tests / 0 failures** (identity 38, driver 120, trip 154, matching 26, payment 33) |
+
+Không dùng DB/broker dev. Chưa commit phần T25. T26 mở khóa (dep T06 + T09 + T22 + T24 + T25 — cả năm DONE).
+
+## Lượt 2026-10-27 — T26: Seed và smoke script — DONE
+
+Chi tiết: [T26](tasks/T26.md).
+
+### Việc đã làm
+- `scripts/seed-demo.sh` (mới): seed 3 passengers + 3 drivers chỉ qua public API Nginx :8080; idempotent (register trùng → 409 EMAIL_TAKEN skip; profile POST 201/200); driver AVAILABLE + tọa độ demo quanh Hồ Gươm (trong radius matching 5000 m).
+- `scripts/smoke-trip.sh` (mới): quote → create (Idempotency-Key mới) → chờ DRIVER_OFFERED (refresh heartbeat drivers mỗi ~10 s — điều kiện matching `last_seen_at < 15 s`) → accept qua offer (§3.2) → start → complete → payment result; verify notifications + event history theo tripId.
+- `scripts/reset-demo.sh` (mới): bắt buộc `--confirm`; hủy trip SEARCHING/DRIVER_OFFERED của demo users, đưa drivers về AVAILABLE + tọa độ seed; không xóa volume, không ghi chéo DB.
+- README: mục "7. Seed & smoke demo (T26)" trong runbook local.
+
+| Lệnh | Kết quả |
+|---|---|
+| `bash scripts/seed-demo.sh` ×2 | run 1: 6 registered; run 2: toàn skip (idempotent) — exit 0 |
+| `bash scripts/smoke-trip.sh` ×2 | **SMOKE PASS** ~12 s/lần: SEARCHING→DRIVER_OFFERED(~6s)→ACCEPTED→IN_PROGRESS→COMPLETED, payment SUCCEEDED; notifications + events verify OK (5 services thật qua Nginx :8080) |
+| `bash scripts/reset-demo.sh [--confirm]` | không --confirm → exit 2 kế hoạch; --confirm → canceled trip DRIVER_OFFERED f1214ec2… + drivers AVAILABLE |
+
+Chưa commit phần T26. Services local để chạy (pid trong scratchpad t26-logs/). T27 mở khóa (dep T08 + T12 + T20 + T24 + T25 — cả năm DONE).

@@ -122,4 +122,15 @@ public class TripController {
             @PathVariable UUID id) {
         return ResponseEntity.ok(tripService.get(id, user));
     }
+
+    /** T25 — GET /api/trips/{id}/events (contract §3.3): owner hoặc assigned driver, phân trang,
+     *  sắp version DESC; không thì 404 (chính sách §1.2). */
+    @GetMapping("/{id}/events")
+    public ResponseEntity<Map<String, Object>> events(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(tripService.events(id, user, page, size));
+    }
 }

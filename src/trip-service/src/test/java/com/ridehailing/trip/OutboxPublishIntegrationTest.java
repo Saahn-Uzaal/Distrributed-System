@@ -142,7 +142,9 @@ class OutboxPublishIntegrationTest {
 
     @AfterEach
     void cleanTables() {
+        // T25: notifications có FK vào trips — xóa trước trips.
         jdbc.update("DELETE FROM trip_events");
+        jdbc.update("DELETE FROM notifications");
         jdbc.update("DELETE FROM outbox");
         jdbc.update("DELETE FROM idempotency_keys");
         jdbc.update("DELETE FROM trips");

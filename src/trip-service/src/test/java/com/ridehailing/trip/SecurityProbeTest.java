@@ -5,7 +5,10 @@ import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSObject;
 import com.nimbusds.jose.Payload;
 import com.nimbusds.jose.crypto.RSASSASigner;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -83,6 +86,19 @@ class SecurityProbeTest {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     @org.springframework.boot.test.web.server.LocalServerPort
     int port;
+
+    @Autowired
+    JdbcTemplate jdbc;
+
+    /** T25 — endpoint notifications đã thật (NotificationController): tạo bảng trên H2 để probe
+     *  chạm tới service layer và assert 200 + list rỗng cho user mới. */
+    @BeforeEach
+    void ensureNotificationsTable() {
+        jdbc.execute("CREATE TABLE IF NOT EXISTS notifications ("
+                + "id UUID PRIMARY KEY, user_id UUID NOT NULL, trip_id UUID NOT NULL,"
+                + "type TEXT NOT NULL, message TEXT NOT NULL, version INT NOT NULL,"
+                + "read_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+    }
 
     private String base() { return "http://localhost:" + port; }
 
@@ -214,11 +230,11 @@ class SecurityProbeTest {
 
     @Test
     void validPassengerTokenPassesFilterAndReachesDispatcher() throws Exception {
-        // T12 fix: /api/trips đã có controller (list) — probe chuyển sang path chưa có handler
-        // (events = T25) để vẫn chứng minh filter chấp nhận token hợp lệ và lỗi mang correlationId
+        // T25 fix: /api/trips/{id}/events giờ là endpoint thật (chạm DB) — probe chuyển sang path
+        // chưa có handler để vẫn chứng minh filter chấp nhận token hợp lệ và lỗi mang correlationId
         // (contract §5).
         String correlation = UUID.randomUUID().toString();
-        Resp resp = get("/api/trips/" + UUID.randomUUID() + "/events", sign(baseClaims("PASSENGER")), correlation);
+        Resp resp = get("/api/trips/" + UUID.randomUUID() + "/history", sign(baseClaims("PASSENGER")), correlation);
         assertThat(resp.status()).isEqualTo(404);
         assertThat(resp.body().get("code")).isEqualTo("NOT_FOUND");
         assertThat(resp.body().get("correlationId")).isEqualTo(correlation);
@@ -243,11 +259,12 @@ class SecurityProbeTest {
 
     @Test
     void validDriverTokenOnExactNotificationsPathPassesFilter() throws Exception {
-        // Chưa có controller notifications (T25) -> 404 JSON chứng minh filter đã chấp nhận token
-        // cho path gốc /api/notifications (trước fix: request đi thẳng tới dispatcher, không qua JWT check).
+        // T25: controller notifications đã thật — filter chấp nhận token cho path gốc
+        // /api/notifications, endpoint trả 200 với list rỗng cho user mới (ownership §3.4).
         Resp resp = get("/api/notifications", sign(baseClaims("DRIVER")), null);
-        assertThat(resp.status()).isEqualTo(404);
-        assertThat(resp.body().get("code")).isEqualTo("NOT_FOUND");
+        assertThat(resp.status()).isEqualTo(200);
+        assertThat((List<?>) resp.body().get("content")).isEmpty();
+        assertThat(((Number) resp.body().get("totalElements")).longValue()).isZero();
     }
 
     @Test

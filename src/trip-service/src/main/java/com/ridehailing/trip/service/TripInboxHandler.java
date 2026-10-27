@@ -67,6 +67,7 @@ public class TripInboxHandler implements InboxEventHandler {
     private final SagaRepository sagaRepo;
     private final OutboxRepository outboxRepo;
     private final TripEventRepository eventRepo;
+    private final NotificationService notifications;
     private final DriverReservationClient reservationClient;
     private final ObjectMapper json;
     private final long offerTtlSeconds;
@@ -75,7 +76,8 @@ public class TripInboxHandler implements InboxEventHandler {
     private final int maxCandidates;
 
     public TripInboxHandler(TripRepository tripRepo, SagaRepository sagaRepo, OutboxRepository outboxRepo,
-                           TripEventRepository eventRepo, DriverReservationClient reservationClient,
+                           TripEventRepository eventRepo, NotificationService notifications,
+                           DriverReservationClient reservationClient,
                            ObjectMapper json,
                            @Value("${app.trip.offer-ttl-seconds:30}") long offerTtlSeconds,
                            @Value("${app.trip.max-matching-attempts:3}") int maxMatchingAttempts,
@@ -85,6 +87,7 @@ public class TripInboxHandler implements InboxEventHandler {
         this.sagaRepo = sagaRepo;
         this.outboxRepo = outboxRepo;
         this.eventRepo = eventRepo;
+        this.notifications = notifications;
         this.reservationClient = reservationClient;
         this.json = json;
         this.offerTtlSeconds = Math.max(1, offerTtlSeconds);
@@ -333,6 +336,11 @@ public class TripInboxHandler implements InboxEventHandler {
         eventRepo.insert(trip.id(), "DRIVER_OFFERED", newVersion, null,
                 "Driver offered: driverId=" + winner.driverId() + " attempt=" + attempt);
 
+        // T25 — notification cùng transaction với trip_event (chốt T25): passenger TRIP_OFFERED,
+        // driver OFFER_RECEIVED (spec flow bước 4: reserve thành công → notify cả hai).
+        notifications.notify(trip.passengerId(), trip.id(), "TRIP_OFFERED", newVersion);
+        notifications.notify(winner.driverUserId(), trip.id(), "OFFER_RECEIVED", newVersion);
+
         audit("trip_driver_offered", trip.id(), attempt, "driver offered tripId={} attempt={} driverId={} reservationId={}",
                 trip.id(), attempt, winner.driverId(), reservationId);
     }
@@ -353,6 +361,7 @@ public class TripInboxHandler implements InboxEventHandler {
             }
             eventRepo.insert(trip.id(), "NO_DRIVER", newVersion, null,
                     "No driver found after " + attempt + " attempts");
+            notifications.notify(trip.passengerId(), trip.id(), "NO_DRIVER", newVersion);
             int sagaRows = sagaRepo.casFromWaitingMatch(trip.id(), saga.version(), "ABORTED", null, null, saga.contextJson());
             if (sagaRows != 1) {
                 throw new IllegalStateException("saga CAS failed for trip " + trip.id());
@@ -429,6 +438,8 @@ public class TripInboxHandler implements InboxEventHandler {
         eventRepo.insert(tripId, ps != null ? "PAYMENT_SUCCEEDED" : "PAYMENT_FAILED", v.get(), null,
                 ps != null ? "Payment succeeded: paymentId=" + ps.paymentId() + " attempt=" + attempt
                           : "Payment failed: paymentId=" + pf.paymentId() + " reason=" + pf.reason());
+        // T25 — notification cùng transaction (chốt T25): passenger nhận kết quả thanh toán.
+        notifications.notify(trip.passengerId(), tripId, ps != null ? "PAYMENT_SUCCEEDED" : "PAYMENT_FAILED", v.get());
 
         audit("payment_result_applied", tripId, attempt,
                 "payment result applied eventType={} tripId={} attempt={} status={}",

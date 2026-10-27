@@ -93,7 +93,8 @@ class TripSagaRestartIntegrationTest {
 
     @org.junit.jupiter.api.AfterEach
     void cleanTables() {
-        for (String table : List.of("inbox_events", "sagas", "trip_events", "outbox", "idempotency_keys", "trips")) {
+        // T25: notifications có FK vào trips — xóa trước trips.
+        for (String table : List.of("inbox_events", "sagas", "trip_events", "notifications", "outbox", "idempotency_keys", "trips")) {
             jdbc().update("DELETE FROM " + table);
         }
     }

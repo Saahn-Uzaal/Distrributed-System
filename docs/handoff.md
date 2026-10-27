@@ -1,5 +1,9 @@
 # Handoff — trạng thái cho lượt kế tiếp
 
+**Cập nhật 27/10/2026 — T26 DONE** (seed + smoke script; chi tiết [T26](tasks/T26.md); chạy thật qua Nginx :8080 với 5 services local: full trip ~12 s, payment SUCCEEDED ×2 lần, seed idempotent). Task kế tiếp: **T27** — UI passenger (owner C; dep T08, T12, T20, T24, T25 — cả năm DONE).
+
+**Cập nhật 27/10/2026 — T25 DONE** (notifications và trip event history; chi tiết [T25](tasks/T25.md); trip-service **154/0**, full repo `clean verify` **BUILD SUCCESS, 371 tests / 0 failures**). Task kế tiếp: **T26** — Seed và smoke script (owner C; dep T06, T09, T22, T24, T25 — cả năm DONE).
+
 **Cập nhật 27/10/2026 — T24 DONE** (trip nhận payment result; chi tiết [T24](tasks/T24.md); trip-service **123/0**, full repo `clean verify` **BUILD SUCCESS, 325 tests / 0 failures**). Task kế tiếp: **T25** — Notifications và trip event history (owner A; dep T19, T20, T22, T24 — cả bốn DONE).
 
 **Cập nhật 27/10/2026 — T23 DONE** (payment consumer; chi tiết [T23](tasks/T23.md); payment-service **18/0**, full repo `clean verify` **BUILD SUCCESS, 319 tests / 0 failures**). Task kế tiếp: **T24** — Trip nhận payment result (owner A; dep T23 DONE).

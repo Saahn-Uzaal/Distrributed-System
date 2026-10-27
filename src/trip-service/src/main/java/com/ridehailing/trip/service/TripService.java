@@ -212,6 +212,46 @@ public class TripService {
         return detail(row);
     }
 
+    /** T25 — GET /api/trips/{id}/events (contract §3.3): owner hoặc assigned driver, phân trang,
+     *  sắp version DESC; envelope như {@link #list}. REPEATABLE_READ như {@link #list} (T12-5): ownership,
+     *  count và content đọc cùng một snapshot — transition chen giữa không làm lệch totalElements. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public Map<String, Object> events(UUID tripId, AuthenticatedUser user, int page, int size) {
+        if (page < 0 || size < 1) {
+            throw new InvalidInputException("page must be >= 0 and size must be >= 1.");
+        }
+        int effectiveSize = Math.min(size, 100); // max 100 — lớn hơn bị clamp (§1.3)
+        TripRepository.TripRow row = tripRepo.findById(tripId)
+                .orElseThrow(() -> new TripNotFoundException("Trip not found."));
+        boolean owner = user.role() == Role.PASSENGER && row.passengerId().equals(user.userId());
+        boolean assignedDriver = user.role() == Role.DRIVER && row.driverUserId() != null
+                && row.driverUserId().equals(user.userId());
+        if (!owner && !assignedDriver) {
+            throw new TripNotFoundException("Trip not found."); // không lộ sự tồn tại trip của người khác (§1.2)
+        }
+        long total = eventRepo.countByTrip(tripId);
+        List<Map<String, Object>> content = eventRepo.listForTrip(tripId, (long) page * effectiveSize, effectiveSize).stream()
+                .map(TripService::eventItem).toList();
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("content", content);
+        envelope.put("page", page);
+        envelope.put("size", effectiveSize);
+        envelope.put("totalElements", total);
+        envelope.put("totalPages", (int) ((total + effectiveSize - 1) / effectiveSize));
+        return envelope;
+    }
+
+    private static Map<String, Object> eventItem(TripEventRepository.EventRow row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", row.type());
+        m.put("version", row.version());
+        m.put("actorId", row.actorId() == null ? null : row.actorId().toString());
+        m.put("summary", row.summary());
+        m.put("createdAt", row.createdAt().truncatedTo(ChronoUnit.SECONDS));
+        return m;
+    }
+
     private Map<String, Object> fare(long distanceM) {
         long km = (distanceM + 999) / 1000; // ceil(distanceM/1000), integer math
         Map<String, Object> out = new LinkedHashMap<>();

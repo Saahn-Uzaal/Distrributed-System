@@ -292,9 +292,11 @@ class TripProposalIntegrationTest {
     @BeforeEach
     void resetState() {
         DRIVER_STUB.reset();
+        // T25: notifications có FK vào trips — xóa trước trips.
         jdbc.update("DELETE FROM inbox_events");
         jdbc.update("DELETE FROM sagas");
         jdbc.update("DELETE FROM trip_events");
+        jdbc.update("DELETE FROM notifications");
         jdbc.update("DELETE FROM outbox");
         jdbc.update("DELETE FROM trips");
         // spring-rabbit 4.x/amqp-client 5: RabbitTemplate không còn purgeQueue, Channel dùng queuePurge.

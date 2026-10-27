@@ -69,6 +69,7 @@ public class TripCommandService {
     private final SagaRepository sagaRepo;
     private final TripEventRepository eventRepo;
     private final OutboxRepository outboxRepo;
+    private final NotificationService notifications;
     private final DriverReservationClient driverClient;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
@@ -76,7 +77,8 @@ public class TripCommandService {
     private final int maxCandidates;
 
     public TripCommandService(TripRepository tripRepo, SagaRepository sagaRepo, TripEventRepository eventRepo,
-                              OutboxRepository outboxRepo, DriverReservationClient driverClient, ObjectMapper json,
+                              OutboxRepository outboxRepo, NotificationService notifications,
+                              DriverReservationClient driverClient, ObjectMapper json,
                               PlatformTransactionManager transactionManager,
                               @Value("${app.trip.max-matching-attempts:3}") int maxMatchingAttempts,
                               @Value("${app.trip.max-candidates:5}") int maxCandidates) {
@@ -84,6 +86,7 @@ public class TripCommandService {
         this.sagaRepo = sagaRepo;
         this.eventRepo = eventRepo;
         this.outboxRepo = outboxRepo;
+        this.notifications = notifications;
         this.driverClient = driverClient;
         this.json = json;
         this.tx = new TransactionTemplate(transactionManager);
@@ -268,6 +271,9 @@ public class TripCommandService {
         // Chốt T18: sau ACCEPTED saga ở AWAITING_FINISH (desired NONE) — assignment hiệu lực, chờ complete (T22).
         sagaRepo.updateLocked(tripId, "AWAITING_FINISH", "NONE", null, writeContext(ctx));
         eventRepo.insert(tripId, "TRIP_ACCEPTED", version, driverUserId, "Driver accepted attempt " + attempt);
+        // T25 — notification cùng transaction (chốt T25): cả passenger và driver.
+        notifications.notify(trip.passengerId(), tripId, "TRIP_ACCEPTED", version);
+        notifications.notify(driverUserId, tripId, "TRIP_ACCEPTED", version);
         audit("trip_accepted", tripId, "SUCCESS", "trip accepted tripId={} attempt={} reservationId={}",
                 tripId, attempt, reservationId);
         return "ACCEPTED";
@@ -462,6 +468,7 @@ public class TripCommandService {
             eventRepo.insert(tripId, eventType, version, driverUserId, reason + " attempt " + attempt);
             eventRepo.insert(tripId, "RESERVATION_RELEASED", version, null, "Reservation " + reservationId + " released");
             eventRepo.insert(tripId, "NO_DRIVER", version, null, "No driver after " + attempt + " attempts");
+            notifications.notify(trip.passengerId(), tripId, "NO_DRIVER", version);
             sagaRepo.updateLocked(tripId, "ABORTED", "NONE", null, writeContext(ctx));
             audit("trip_rejected_no_driver", tripId, "SUCCESS",
                     "offer " + reason.toLowerCase() + ", trip NO_DRIVER tripId={} attempt={}", tripId, attempt);
@@ -615,6 +622,12 @@ public class TripCommandService {
                     "Reservation " + ctx.get("reservationId") + " released (cancel)");
         }
         eventRepo.insert(tripId, "TRIP_CANCELLED", version, passengerUserId, "Trip cancelled by passenger");
+        // T25 — notification cùng transaction (chốt T25): passenger luôn; driver nếu đã offer lúc hủy
+        // (trip row đọc TRƯỚC markCancelled — sau đó driver_user_id bị NULL).
+        notifications.notify(passengerUserId, tripId, "TRIP_CANCELLED", version);
+        if (trip.driverUserId() != null) {
+            notifications.notify(trip.driverUserId(), tripId, "TRIP_CANCELLED", version);
+        }
         ctx.remove("intent");
         sagaRepo.updateLocked(tripId, "ABORTED", "NONE", null, writeContext(ctx));
         audit("trip_cancelled", tripId, "SUCCESS", "trip cancelled tripId={} from={}", tripId, ctx.get("cancelFrom"));
@@ -833,6 +846,7 @@ public class TripCommandService {
             throw new IllegalStateException("trips CAS SEARCHING→NO_DRIVER failed for " + tripId);
         }
         eventRepo.insert(tripId, "NO_DRIVER", version, null, "No driver found after matching deadline");
+        notifications.notify(trip.passengerId(), tripId, "NO_DRIVER", version);
         sagaRepo.updateLocked(tripId, "ABORTED", "NONE", null, writeContext(readContext(saga.contextJson())));
         audit("no_driver_deadline", tripId, "SUCCESS",
                 "matching deadline passed with no offer; trip NO_DRIVER tripId={}", tripId);
@@ -927,6 +941,9 @@ public class TripCommandService {
         int version = tripRepo.markCompleted(tripId)
                 .orElseThrow(() -> new IllegalStateException("trips CAS IN_PROGRESS→COMPLETED failed for " + tripId));
         eventRepo.insert(tripId, "TRIP_COMPLETED", version, caller, "Driver completed the trip");
+        // T25 — notification cùng transaction (chốt T25): cả passenger và driver.
+        notifications.notify(trip.passengerId(), tripId, "TRIP_COMPLETED", version);
+        notifications.notify(caller, tripId, "TRIP_COMPLETED", version);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tripId", tripId.toString());
         payload.put("attempt", 1);

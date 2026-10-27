@@ -127,7 +127,9 @@ class TripIntegrationTest {
 
     @AfterEach
     void cleanTables() {
+        // T25: notifications có FK vào trips — xóa trước trips.
         jdbc.update("DELETE FROM trip_events");
+        jdbc.update("DELETE FROM notifications");
         jdbc.update("DELETE FROM outbox");
         jdbc.update("DELETE FROM idempotency_keys");
         jdbc.update("DELETE FROM trips");
@@ -732,7 +734,7 @@ class TripIntegrationTest {
                     key, hash, originalResponse);
             var upgraded = Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load();
             upgraded.migrate();
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("7"); // T21: V7 saga worker lease (lease_owner)
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("8"); // T25: V8 notifications
             assertThat(legacy.queryForObject("SELECT principal_id FROM idempotency_keys WHERE key = ?", UUID.class, key))
                     .isEqualTo(passenger);
             assertThat(legacy.queryForObject("SELECT operation FROM idempotency_keys WHERE key = ?", String.class, key))

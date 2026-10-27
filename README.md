@@ -154,6 +154,17 @@ docker compose --env-file .env -f deploy/compose.yaml up -d nginx
 - Dev server: `npm run dev` ở `src/web/` (:5173, có proxy `/api/*` tới :8081/:8082/:8083) — không cần nginx khi phát triển UI.
 - Token lưu trong sessionStorage; không log token (source + access log Nginx đều không chứa).
 
+### 7. Seed & smoke demo (T26)
+Sau khi hạ tầng + 5 services chạy, seed 3 passengers/3 drivers và smoke một chuyến hoàn chỉnh — chỉ qua public API của Nginx :8080, không ghi DB trực tiếp, không chạm volume:
+
+```bash
+bash scripts/seed-demo.sh            # idempotent: chạy lại không tạo trùng (409 EMAIL_TAKEN -> skip)
+bash scripts/smoke-trip.sh           # quote -> create -> offer -> accept -> start -> complete -> payment result + verify notifications/events
+bash scripts/reset-demo.sh --confirm  # hủy trip chưa terminal của demo users, đưa drivers về AVAILABLE (bắt buộc --confirm)
+```
+
+`SEED_PASSWORD` đọc từ `.env` (dev-only). Tọa độ demo quanh Hồ Gươm; 3 driver nằm trong radius matching 5000 m của pickup. Smoke dùng Idempotency-Key mới mỗi lần chạy; trip COMPLETED không chặn create kế tiếp.
+
 ## Cấu trúc repository
 
 Theo đề §10.1 và đặc tả mục 16 (C02):

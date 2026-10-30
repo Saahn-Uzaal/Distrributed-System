@@ -110,7 +110,8 @@ class TripRejectIntegrationTest extends TripCommandTestSupport {
         assertThat(tripRequestedPayloads(o.tripId())).hasSize(3); // attempt 1, 2, 3 — không có attempt 4
     }
 
-    /** Sai driver/attempt → NOT_OFFERED_DRIVER; trip không có offer → STATE_CONFLICT; passenger → 403. */
+    /** Sai driver/attempt → NOT_OFFERED_DRIVER, kể cả khi trip chưa có offer (không lộ state cho người ngoài);
+     *  driver đã từng được offer gọi lại khi trip hết offer → STATE_CONFLICT; passenger → 403. */
     @Test
     void wrongCallerOrStateIsRejected() throws Exception {
         Offered o = offeredTrip();
@@ -123,8 +124,15 @@ class TripRejectIntegrationTest extends TripCommandTestSupport {
         UUID searching = createTrip(passenger);
         Resp r = post("/api/trips/" + searching + "/reject", token(UUID.randomUUID(), "DRIVER"), "{\"attempt\":1}");
         assertThat(r.status()).isEqualTo(409);
-        assertThat(r.body()).containsEntry("code", "STATE_CONFLICT");
+        assertThat(r.body()).containsEntry("code", "NOT_OFFERED_DRIVER");
+        assertThat(String.valueOf(r.body().get("details"))).doesNotContain("SEARCHING");
         assertThat(DRIVER.countCalls("POST:")).isZero();
+
+        // Driver cũ của chính trip này: reject đã ghi nhận, accept về sau biết trip không còn chờ họ.
+        assertThat(reject(o, o.driverUserId(), 1).status()).isEqualTo(202);
+        Resp late = accept(o, o.driverUserId(), 1);
+        assertThat(late.status()).isEqualTo(409);
+        assertThat(late.body()).containsEntry("code", "STATE_CONFLICT");
     }
 
     /** Reject lặp lại → cùng kết quả, chỉ một lệnh release, chỉ một TripRequested attempt 2. */

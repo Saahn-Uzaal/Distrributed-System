@@ -1,8 +1,8 @@
 # DS03 — local infrastructure (T04: PostgreSQL riêng quyền + RabbitMQ; T08: Nginx)
-# Chạy: docker compose --env-file .env -f deploy/compose.yaml up -d
-# Ghi chú: 5 backend services chạy là tiến trình Java local trên host (runbook README);
-# nginx container proxy /api/* tới host.docker.internal. Khi container hóa services ở T29,
-# đổi proxy_pass sang DNS tên service compose.
+# + T29: 5 backend services containerized từ MỘT image dùng chung (deploy/docker/Dockerfile.backend)
+#   và frontend build vào nginx image (deploy/docker/Dockerfile.web).
+# Chạy toàn hệ thống: docker compose --env-file .env -f deploy/compose.yaml up --build -d
+# (clean checkout cần scripts/generate-dev-keys.sh trước — keys/*.pem gitignored, bind-mount vào service cần key.)
 name: ridehailing
 
 services:
@@ -64,27 +64,227 @@ services:
       start_period: 20s
     networks: [backend]
 
-  # T08 — Nginx: phục vụ frontend build (web/dist) + proxy /api/* tới services local trên host.
-  # Public port 8080 theo spec §12. Config: deploy/nginx.conf.
+  # T29 — identity-service (port 8081). Cùng image backend cho cả 5 services; command riêng.
+  identity-service:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.backend
+    image: ridehailing-backend:0.1.0
+    container_name: ridehailing-identity-service
+    restart: unless-stopped
+    command: java -jar /app/identity-service.jar
+    # Key private mode 600 thuộc user host: Linux đặt HOST_UID/HOST_GID để đọc được (.env.example).
+    user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    volumes:
+      # Long syntax: thiếu file thì compose báo lỗi, không tự tạo thư mục rỗng.
+      # Private key CHỈ ở identity-service (spec §11) — service khác không giả được token.
+      - type: bind
+        source: ../keys/jwt-private.pem
+        target: /app/keys/jwt-private.pem
+        read_only: true
+      - type: bind
+        source: ../keys/jwt-public.pem
+        target: /app/keys/jwt-public.pem
+        read_only: true
+    environment:
+      # N02/T29: bind 0.0.0.0 TRONG container (nginx proxy tới DNS service); publish CHỈ 127.0.0.1 bên dưới.
+      SERVER_ADDRESS: 0.0.0.0
+      DB_HOST: postgres
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD}
+      JWT_EXPIRES_IN_SECONDS: ${JWT_EXPIRES_IN_SECONDS:-3600}
+    ports:
+      # Dev/debug only — health links demo từ host browser; KHÔNG mở ra LAN, không expose qua nginx :8080.
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # N17/C06: readiness gồm DB — healthy thật sau khi Flyway migrate xong và DB reachable.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+
+  # T29 — driver-service (port 8082).
+  driver-service:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.backend
+    image: ridehailing-backend:0.1.0
+    container_name: ridehailing-driver-service
+    restart: unless-stopped
+    command: java -jar /app/driver-service.jar
+    volumes:
+      - type: bind
+        source: ../keys/jwt-public.pem
+        target: /app/keys/jwt-public.pem
+        read_only: true
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      DB_HOST: postgres
+      DRIVER_DB_PASSWORD: ${DRIVER_DB_PASSWORD}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      RESERVATION_EXPIRY_ENABLED: ${RESERVATION_EXPIRY_ENABLED:-true}
+      RESERVATION_EXPIRY_FIXED_DELAY_MS: ${RESERVATION_EXPIRY_FIXED_DELAY_MS:-1000}
+    ports:
+      # Dev/debug only — health links demo từ host browser; KHÔNG mở ra LAN, không expose qua nginx :8080.
+      - "127.0.0.1:8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+
+  # T29 — trip-service (port 8083). Gọi driver-service qua DNS compose.
+  trip-service:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.backend
+    image: ridehailing-backend:0.1.0
+    container_name: ridehailing-trip-service
+    restart: unless-stopped
+    command: java -jar /app/trip-service.jar
+    volumes:
+      - type: bind
+        source: ../keys/jwt-public.pem
+        target: /app/keys/jwt-public.pem
+        read_only: true
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      DB_HOST: postgres
+      TRIP_DB_PASSWORD: ${TRIP_DB_PASSWORD}
+      FARE_BASE_VND: ${FARE_BASE_VND:-12000}
+      FARE_PER_KM_VND: ${FARE_PER_KM_VND:-5000}
+      TRIP_MATCH_DEADLINE_SECONDS: ${TRIP_MATCH_DEADLINE_SECONDS:-120}
+      # T29: broker qua DNS compose (mặc định yml là localhost — KHÔNG đúng trong container).
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      DRIVER_SERVICE_URL: http://driver-service:8082
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+    ports:
+      # Dev/debug only — health links demo từ host browser; KHÔNG mở ra LAN, không expose qua nginx :8080.
+      - "127.0.0.1:8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8083/actuator/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+
+  # T29 — matching-service (port 8084). Gọi driver-service qua DNS compose.
+  matching-service:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.backend
+    image: ridehailing-backend:0.1.0
+    container_name: ridehailing-matching-service
+    restart: unless-stopped
+    command: java -jar /app/matching-service.jar
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      DB_HOST: postgres
+      MATCHING_DB_PASSWORD: ${MATCHING_DB_PASSWORD}
+      # T29: broker qua DNS compose (mặc định yml là localhost — KHÔNG đúng trong container).
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      DRIVER_SERVICE_URL: http://driver-service:8082
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+    ports:
+      # Dev/debug only — health links demo từ host browser; KHÔNG mở ra LAN, không expose qua nginx :8080.
+      - "127.0.0.1:8084:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/actuator/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+
+  # T29 — payment-service (port 8085).
+  payment-service:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.backend
+    image: ridehailing-backend:0.1.0
+    container_name: ridehailing-payment-service
+    restart: unless-stopped
+    command: java -jar /app/payment-service.jar
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      DB_HOST: postgres
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD}
+      # 0 = luôn thành công; 1 = luôn decline — đổi để demo payment FAILED.
+      PAYMENT_SIMULATE_FAIL_RATE: ${PAYMENT_SIMULATE_FAIL_RATE:-0}
+      # T29: broker qua DNS compose (mặc định yml là localhost — KHÔNG đúng trong container).
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+    ports:
+      # Dev/debug only — health links demo từ host browser; KHÔNG mở ra LAN, không expose qua nginx :8080.
+      - "127.0.0.1:8085:8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8085/actuator/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+
+  # T29 — Nginx: frontend build + proxy conf BAKE vào image (deploy/docker/Dockerfile.web).
+  # Proxy /api/* sang DNS tên service compose (identity-service/driver-service/trip-service) —
+  # không còn host.docker.internal hay bind-mount dist. Public port duy nhất của hệ thống: 8080.
   nginx:
-    # F32 fix: pin patch version đầy đủ (nginx:1.27.5-alpine — bản thực tế của tag 1.27).
-    image: nginx:1.27.5-alpine
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.web
+    image: ridehailing-web:0.1.0
     container_name: ridehailing-nginx
     restart: unless-stopped
-    # N14 fix: host.docker.internal không tồn tại trên Docker Engine Linux (WSL/VM) —
-    # map về host-gateway để proxy /api/* tới services local chạy được trên mọi nền tảng.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      # Build frontend trước khi up nginx (npm run build ở src/web/) — C02
-      - ../src/web/dist:/usr/share/nginx/html:ro
+    # service_started (không chờ healthy): gateway lên sớm và trả JSON 502 thay vì không có gì
+    # trong lúc backend khởi động; upstream `resolve` trong nginx.conf tự cập nhật khi đổi IP.
+    depends_on:
+      identity-service:
+        condition: service_started
+      driver-service:
+        condition: service_started
+      trip-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks: [backend]
 
   # T04 (+N15): declare RabbitMQ topology TỰ ĐỘNG sau khi broker healthy — one-shot container.
-  # Mỗi lần `docker compose up -d` (kể cả sau `down -v`) container tạo mới và chạy lại script,
+  # Mỗi lần `docker compose up` (kể cả sau `down -v`) container tạo mới và chạy lại script,
   # nên reset volume broker KHÔNG cần chạy tay. Script thủ công vẫn giữ làm công cụ phụ.
   topo-declare:
     image: rabbitmq:3.13.7-management-alpine   # F32: cùng tag pin với broker
@@ -109,6 +309,6 @@ volumes:
   rabbitmq_data:
 
 networks:
-  # Mạng chung cho infra (và services khi containerized ở T29) — DNS theo tên service
+  # Mạng chung cho infra + services — DNS theo tên service (T29).
   backend:
     name: ridehailing_net

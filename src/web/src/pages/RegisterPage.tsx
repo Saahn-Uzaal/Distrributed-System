@@ -6,10 +6,13 @@ import { api, ApiError } from '../api/client'
 import { saveSession, routeForRole } from '../auth/session'
 import { bumpAuthGeneration, getAuthGeneration } from '../auth/generation'
 import { validateEmail, validateFullName, validatePassword } from '../auth/validation'
+import { errorHint } from '../ui/errorHint'
 
 export default function RegisterPage(): ReactElement {
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
+  // T27 — gợi ý tiếng Việt cho mã lỗi đã biết (vd RATE_LIMITED 429).
+  const [hint, setHint] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   // F16: continuation của register/login cũ không được ghi đè phiên mới.
   const mountedRef = useRef(true)
@@ -29,6 +32,7 @@ export default function RegisterPage(): ReactElement {
     role: 'PASSENGER' | 'DRIVER'
   }): Promise<void> {
     setError(null)
+    setHint(null)
     setLoading(true)
     const gen = bumpAuthGeneration()
     const controller = new AbortController()
@@ -51,6 +55,7 @@ export default function RegisterPage(): ReactElement {
     } catch (e) {
       if (!mountedRef.current) return
       setError(e instanceof ApiError ? `${e.code}: ${e.message}` : 'Lỗi không xác định')
+      setHint(e instanceof ApiError ? errorHint(e.code) : null)
     } finally {
       setLoading(false)
     }
@@ -58,7 +63,7 @@ export default function RegisterPage(): ReactElement {
 
   return (
     <Card title="Đăng ký" style={{ maxWidth: 420, margin: '48px auto' }}>
-      {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {error && <Alert type="error" message={error} description={hint ?? undefined} style={{ marginBottom: 16 }} />}
       <Form layout="vertical" onFinish={onFinish}>
         {/* F17: email khớp backend — không blank, ≤ 254 ký tự (định dạng do AntD kiểm tra). */}
         <Form.Item

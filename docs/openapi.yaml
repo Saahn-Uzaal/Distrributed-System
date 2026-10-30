@@ -90,6 +90,25 @@ paths:
         "401": {$ref: "#/components/responses/Unauthorized"}
 
   # ---------------- driver-service — public (T09) ----------------
+  /api/drivers/me:
+    get:
+      tags: [driver-public]
+      operationId: getDriverState
+      summary: Trạng thái hiện tại của driver (role DRIVER)
+      description: >
+        Nguồn sự thật cho UI khi tải lại. Chỉ đọc — không đổi state hay heartbeat.
+        tripId là trip đang gắn với driver khi RESERVED/BUSY, còn lại null.
+      responses:
+        "200":
+          description: Trạng thái driver
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DriverState"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
   /api/drivers/me/profile:
     post:
       tags: [driver-public]
@@ -527,6 +546,22 @@ components:
           schema: {$ref: "#/components/schemas/ApiError"}
 
   schemas:
+    DriverState:
+      type: object
+      required: [driverId, displayName, vehicle, status]
+      properties:
+        driverId: {type: string, format: uuid}
+        displayName: {type: string}
+        vehicle:
+          type: object
+          properties:
+            plateNumber: {type: string}
+            vehicleType: {type: string, enum: [MOTORBIKE, CAR]}
+        status: {type: string, enum: [OFFLINE, AVAILABLE, RESERVED, BUSY]}
+        latitude: {type: number, nullable: true}
+        longitude: {type: number, nullable: true}
+        lastSeenAt: {type: string, format: date-time, nullable: true}
+        tripId: {type: string, format: uuid, nullable: true}
     ApiError:
       type: object
       required: [code, message, correlationId]

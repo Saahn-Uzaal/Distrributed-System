@@ -1,6 +1,7 @@
 server:
   port: 8085
-  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt SERVER_ADDRESS=0.0.0.0 nhưng không publish port.
+  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt
+  # SERVER_ADDRESS=0.0.0.0 và publish port CHỈ 127.0.0.1 (dev/debug — health links demo, xem compose).
   address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
@@ -17,7 +18,8 @@ spring:
     # listener retry ở nền; app vẫn khởi động (broker không nằm trong readiness).
     password: ${RABBITMQ_PASSWORD}
   datasource:
-    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/payment_db
+    # T29: DB_HOST env (compose đặt postgres; mặc định localhost giữ hành vi chạy local).
+    url: jdbc:postgresql://${DB_HOST:localhost}:${POSTGRES_PORT:5432}/payment_db
     username: payment_svc
     # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
     password: ${PAYMENT_DB_PASSWORD}
@@ -36,6 +38,10 @@ app:
     consumer-name: payment-service # thành phần dedup — mỗi service một tên riêng (§4.1)
     max-retries: 3                  # số lần retry sau attempt đầu tiên fail (tổng tối đa 4 execution)
     retry-backoff-ms: 1000,3000,10000
+    # R02 (spec §13): failpoint test-only — sleep giữa DB commit và ACK; mặc định 0 = tắt.
+    # Bật qua env APP_INBOX_FAILPOINT_DELAY_MS CHỈ trong kịch bản scripts/recovery-r02.sh,
+    # không dùng production (fault injection chỉ bật bằng profile/env test).
+    failpoint-delay-ms: ${APP_INBOX_FAILPOINT_DELAY_MS:0}
   # T23 — outbox producer payment-service (events.md §4.6, pattern trip T13/matching T15).
   outbox:
     enabled: true

@@ -44,6 +44,7 @@ public class PaymentInboxListener {
     private final String consumerName;
     private final int maxRetries;
     private final long[] backoffMs;
+    private final long failpointDelayMs;
 
     public PaymentInboxListener(InboxMessageValidator validator,
                                InboxEventRepository inboxRepo,
@@ -52,7 +53,8 @@ public class PaymentInboxListener {
                                PlatformTransactionManager txManager,
                                @Value("${app.inbox.consumer-name:payment-service}") String consumerName,
                                @Value("${app.inbox.max-retries:3}") int maxRetries,
-                               @Value("${app.inbox.retry-backoff-ms:1000,3000,10000}") String backoffCsv) {
+                               @Value("${app.inbox.retry-backoff-ms:1000,3000,10000}") String backoffCsv,
+                               @Value("${app.inbox.failpoint-delay-ms:0}") long failpointDelayMs) {
         this.validator = validator;
         this.inboxRepo = inboxRepo;
         this.handler = handler;
@@ -61,6 +63,25 @@ public class PaymentInboxListener {
         this.consumerName = consumerName;
         this.maxRetries = Math.max(0, maxRetries);
         this.backoffMs = parseBackoff(backoffCsv);
+        this.failpointDelayMs = Math.max(0, failpointDelayMs);
+    }
+
+    /**
+     * R02 (spec §13) — failpoint test-only: cửa sổ xác định SAU DB commit TRƯỚC ACK, bật bằng env
+     * {@code app.inbox.failpoint-delay-ms} (mặc định 0 = tắt). scripts/recovery-r02.sh kill process
+     * trong cửa sổ này để chứng minh redelivery không tạo payment trùng. Không phải endpoint public.
+     */
+    private void sleepFailpoint() {
+        if (failpointDelayMs <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(failpointDelayMs);
+        } catch (InterruptedException ie) {
+            // Commit đã xong — ACK vẫn an toàn; giữ interrupt flag.
+            Thread.currentThread().interrupt();
+            log.warn("failpoint sleep interrupted before ack", ie);
+        }
     }
 
     private static long[] parseBackoff(String csv) {
@@ -151,14 +172,15 @@ public class PaymentInboxListener {
                     MDC.put("eventType", "inbox_duplicate");
                     MDC.put("result", "success");
                     log.info("duplicate event skipped eventId={} deliveryAttempt={}", envelope.eventId(), attempt);
-                    channel.basicAck(deliveryTag, false);
                 } else {
                     MDC.put("eventType", "inbox_processed");
                     MDC.put("result", "success");
                     log.info("event processed eventId={} eventType={} tripId={}",
                             envelope.eventId(), envelope.eventType(), envelope.aggregateId());
-                    channel.basicAck(deliveryTag, false);
                 }
+                // R02 (spec §13): failpoint test-only — sleep giữa commit và ACK khi env bật.
+                sleepFailpoint();
+                channel.basicAck(deliveryTag, false);
                 return;
             } catch (RuntimeException e) {
                 // Rollback: không có inbox row commit → redelivery/retry xử lý lại từ đầu.

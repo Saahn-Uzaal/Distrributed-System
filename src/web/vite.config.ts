@@ -17,6 +17,8 @@ export default defineConfig({
   },
   test: {
     // Môi trường mặc định node; file test jsdom khai báo qua docblock @vitest-environment.
-    setupFiles: ['./src/test/setup.ts']
+    setupFiles: ['./src/test/setup.ts'],
+    // Render antd trong jsdom chậm khi máy bận (build song song, CI): mặc định 5 s gây fail ngẫu nhiên.
+    testTimeout: 20_000
   }
 })

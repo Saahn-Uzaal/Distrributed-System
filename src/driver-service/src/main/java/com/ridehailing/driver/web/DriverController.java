@@ -32,6 +32,12 @@ public class DriverController {
         this.service = service;
     }
 
+    /** State hiện tại của driver (contract §3.2) — nguồn sự thật cho UI, không có side effect. */
+    @GetMapping
+    public DriverService.DriverState currentState(HttpServletRequest req) {
+        return service.currentState(principal(req).userId());
+    }
+
     @PostMapping("/profile")
     public ResponseEntity<DriverService.Profile> createProfile(HttpServletRequest req,
                                                                 @RequestBody ProfileRequest body) {

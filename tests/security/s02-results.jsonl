@@ -1,0 +1,7 @@
+{"probe":"Q1","label":"quote lat=999","status":400,"code":"INVALID_INPUT"}
+{"probe":"C1","label":"create missing destination","status":400,"code":"INVALID_INPUT"}
+{"probe":"C2","label":"create lat=-95 out of range","status":400,"code":"INVALID_INPUT"}
+{"probe":"B1","label":"oversized payload ~200KiB","status":413,"code":"PAYLOAD_TOO_LARGE"}
+{"probe":"T1","label":"start trên DRIVER_OFFERED","status":409,"code":"STATE_CONFLICT"}
+{"probe":"T2","label":"accept bởi driver không được offer","status":409,"code":"NOT_OFFERED_DRIVER"}
+{"probe":"T3","label":"cancel trên COMPLETED","status":409,"code":"STATE_CONFLICT"}

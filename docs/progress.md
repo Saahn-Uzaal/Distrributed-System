@@ -826,3 +826,126 @@ Chi tiết: [T26](tasks/T26.md).
 | `bash scripts/reset-demo.sh [--confirm]` | không --confirm → exit 2 kế hoạch; --confirm → canceled trip DRIVER_OFFERED f1214ec2… + drivers AVAILABLE |
 
 Chưa commit phần T26. Services local để chạy (pid trong scratchpad t26-logs/). T27 mở khóa (dep T08 + T12 + T20 + T24 + T25 — cả năm DONE).
+
+## Lượt 2026-10-29 — T27: UI passenger — DONE
+
+Chi tiết: [T27](tasks/T27.md).
+
+### Việc đã làm
+- `src/web/src/trips/types.ts`, `api/trips.ts`, `hooks/usePolling.ts`, `ui/errorHint.ts` (mới): types/helpers trip, API client trips với Idempotency-Key, hook polling chung có cleanup + stop conditions, hint lỗi tiếng Việt.
+- `pages/passenger/{CreateTripForm,TripsListPanel,NotificationsPanel}.tsx`, `pages/TripDetailPage.tsx` (mới): form quote/create (key giữ chỉ sau timeout/mạng → replay không trùng), list 5 s polling + nút Hủy theo state, notifications 10 s, detail 3 s polling dừng khi terminal/NOT_FOUND.
+- `PassengerHome.tsx` viết lại (Tabs "Chuyến đi"/"Thông báo"), `App.tsx` thêm route `/passenger/trips/:tripId`, `api/client.ts` export `http()` generic + `extraHeaders` + `ApiError.details`.
+- Tests mới: trips/types, usePolling, api/trips, errorHint.
+
+| Lệnh | Kết quả |
+|---|---|
+| `cd src/web && npm test` | **74 passed (74)** (trước T27/T28 là 43) |
+| `cd src/web && npm run build` | tsc + vite pass (warning chunk >500 kB không fatal) |
+| Live script qua Nginx :8080 (scratchpad `t27t28-logs/t27-live.sh`) | passenger-1: quote → create 202 (trip `f30ff85c…`) → replay cùng key+payload → **202 cùng tripId** (không trùng) → create key khác khi active → **409 ACTIVE_TRIP_EXISTS** → heartbeat driver-1..3 → poll tới DRIVER_OFFERED (~6 s) → cancel → **202 CANCELLED** → notifications TRIP_OFFERED + TRIP_CANCELLED |
+
+Chưa commit phần T27. Nginx serve dist đã build: GET /passenger, /driver → index.html 200.
+
+## Lượt 2026-10-29 — T28: UI driver — DONE
+
+Chi tiết: [T28](tasks/T28.md).
+
+### Việc đã làm
+- `src/web/src/drivers/types.ts`, `api/drivers.ts` (mới): types/helpers driver (`parseBusyDetails` cho details 409 `{state,tripId}`, đếm ngược offer), API client drivers.
+- `pages/driver/BusyTripPanel.tsx` (mới) + `DriverHome.tsx` viết lại: boot probe PUT availability với status cache (409 → khôi phục busy state + link chuyến sau reload); profile qua re-POST idempotent; heartbeat 10 s chỉ khi AVAILABLE; poll offer 3 s khi AVAILABLE/RESERVED; accept `{attempt}` reconcile tới ACCEPTED; start/complete disable theo state; recovery loop probe availability sau trip terminal.
+- Tests mới: drivers/types, api/drivers.
+
+| Lệnh | Kết quả |
+|---|---|
+| `cd src/web && npm test` | **74 passed (74)** — gồm tests mới drivers/types, api/drivers |
+| `cd src/web && npm run build` | tsc + vite pass |
+| Live script qua Nginx :8080 (scratchpad `t27t28-logs/t28-live.sh`) | driver-1: boot probe 200 AVAILABLE → passenger create 202 (trip `2252e5cd…`) → nhận offer (`distanceM=1920`, `fareVnd=22000`) → PUT availability khi RESERVED → **409 details {state:"RESERVED", tripId}** → accept attempt 1 → **202 ACCEPTED** → PUT availability khi BUSY → **409 details {state:"BUSY", tripId}** (cơ chế reload recovery) → start 200 IN_PROGRESS → complete 200 COMPLETED/PENDING → poll paymentStatus → **SUCCEEDED** (~10 s) → notifications driver OFFER_RECEIVED/TRIP_ACCEPTED/TRIP_COMPLETED |
+
+Chưa commit phần T28. Services local để chạy (pid trong scratchpad t27t28-logs/). T29 mở khóa (dep T26 + T27 + T28 — cả ba DONE).
+
+## Lượt 2026-10-30 — T29: Màn hình demo và triển khai đầy đủ — DONE
+
+Chi tiết: [T29](tasks/T29.md).
+
+### Việc đã làm
+- `deploy/docker/Dockerfile.backend` (mới): multi-stage Maven build cả 5 module trong một reactor run → image runtime chứa 5 jar + curl + JWT dev keys; `Dockerfile.web` (mới): node alpine build → nginx alpine với dist + nginx.conf baked-in.
+- `deploy/compose.yaml`: thêm 5 service backend từ một image chung (command riêng), env DB_HOST/RABBITMQ_HOST/DRIVER_SERVICE_URL, ports publish CHỈ 127.0.0.1, healthcheck readiness, depends_on service_healthy; nginx build từ Dockerfile.web.
+- `deploy/nginx.conf`: proxy_pass → DNS compose; `/actuator/*` + `/internal/*` trả 404 tường minh trước SPA fallback.
+- 5× `application.yml`: datasource qua `${DB_HOST:localhost}`.
+- Frontend: `DemoOverview.tsx` (mới) + route `/demo` (Authed, mọi role); `scripts/correlation-filter.sh` (mới).
+- README: mục chính "Chạy toàn hệ thống bằng Docker Compose (T29)".
+
+| Lệnh | Kết quả |
+|---|---|
+| `docker compose down -v && docker compose --env-file .env -f deploy/compose.yaml up --build -d` | Toàn stack healthy ~15 s, DB mới — Flyway migrate sạch; build backend ~74 s (layer cache ấm) |
+| `bash scripts/seed-demo.sh` | PASS |
+| `bash scripts/smoke-trip.sh` | **PASS** — SEARCHING→DRIVER_OFFERED(~6 s)→ACCEPTED→IN_PROGRESS→COMPLETED + payment SUCCEEDED (~11 s) |
+| `curl http://localhost:8080/actuator/health`, `/actuator/health/readiness`, `/internal/drivers/candidates` | **404** cả ba (route private không lộ qua nginx); health dev links `localhost:808x/actuator/health/readiness` → 200 ×5 |
+| `bash scripts/correlation-filter.sh <cid>` | Tìm đúng cid trong log trip-service + nginx access log |
+| `cd src/web && npm run build` / `npm test` | pass (warning chunk-size không fatal) / **74/74** |
+
+Lỗi sửa trong lúc kiểm chứng: thiếu `RABBITMQ_HOST=rabbitmq` trong env compose của trip/matching/payment (yml mặc định `localhost` — sai trong container) → smoke run đầu kẹt SEARCHING; thêm biến, recreate 3 container, chạy lại PASS. Trip kẹt cũ tự hồi NO_DRIVER sau broker reconnect (outbox replay hoạt động).
+
+## Lượt 2026-10-30 — T30: Test concurrency hệ thống (C01/C02) — DONE
+
+Chi tiết: [T30](tasks/T30.md).
+
+### Việc đã làm
+- `scripts/concurrency-c01.sh` (mới): 2× POST /api/trips đồng thời qua barrier, poll cả 2 trip + đếm DB `drivers.status='RESERVED'` mỗi ~2 s, hội tụ {DRIVER_OFFERED, NO_DRIVER}, cleanup verify driver AVAILABLE.
+- `scripts/concurrency-c02.sh` (mới): create → chờ offer → accept `{attempt}` + cancel đồng thời qua barrier với jitter 0–190 ms/piah; assert đúng một 2xx + bên kia 409 STATE_CONFLICT; cleanup theo winner (accept: start+complete; cancel: poll CANCELLED), verify driver AVAILABLE.
+- Raw results: `tests/concurrency/c01-results.jsonl`, `c01-snapshots.jsonl`, `c01-summary.txt`, `c02-results.jsonl`, `c02-summary.txt`.
+
+| Lệnh | Kết quả |
+|---|---|
+| `bash scripts/concurrency-c01.sh` (20 lượt) | **PASS** — ok=20 fail=0, offers_seen 20/20; max_concurrent_offered=1, max_db_reserved=1 trên 120 snapshot; final `(DRIVER_OFFERED, NO_DRIVER)` mọi lượt (~517 s) |
+| `bash scripts/concurrency-c02.sh` (8 lượt) | **PASS** — ok=8 fail=0, accept_wins=3/cancel_wins=5; mỗi race một 2xx + loser 409 STATE_CONFLICT; driver AVAILABLE cuối mọi lượt (~61 s) |
+
+Lỗi sửa trong lúc kiểm chứng: `cancel_nonterminal` (script test) gọi wait cho cả trip đã terminal → false fail ở reset lượt 2 run đầu C02; sửa chỉ wait sau cancel/CANCELLING thật. Không có lỗi product trong phạm vi T30.
+
+## Lượt 2026-10-30 — T31: Test failure/recovery (R01/R02) — DONE
+
+Chi tiết: [T31](tasks/T31.md).
+
+### Việc đã làm
+- `scripts/recovery-r01.sh` (mới): Phase A `docker stop` matching → create trip → verify `matching.inbox depth ≥ 1` → start lại trong deadline 120 s → DRIVER_OFFERED; Phase B quá deadline → NO_DRIVER + audit log `stale_event_skipped`, driver AVAILABLE.
+- `scripts/recovery-r02.sh` (mới): full flow với failpoint test-only `APP_INBOX_FAILPOINT_DELAY_MS=8000` (hook giữa DB commit và ACK trong `PaymentInboxListener.sleepFailpoint()`) bật qua compose override file tạm; kill payment-service đúng cửa sổ lỗi → verify redelivery pending trong queue → restart → dedup `inbox_duplicate`, payments rows=1, SUCCEEDED.
+- Raw results: `tests/recovery/r01-results.jsonl`, `r01-summary.txt`, `r02-results.jsonl`, `r02-summary.txt`.
+
+| Lệnh | Kết quả |
+|---|---|
+| `bash scripts/recovery-r01.sh` | **PASS** — Phase A ~16 s (depth=1 → DRIVER_OFFERED, cleanup CANCELLED); Phase B ~132 s (NO_DRIVER + log stale_event_skipped đầy đủ) |
+| `bash scripts/recovery-r02.sh` | **PASS** — ~38 s; payments rows=1, inbox_events=1, SUCCEEDED, redelivery pending trước restart, dedup log inbox_duplicate deliveryAttempt=1 |
+
+Lỗi sửa trong lúc kiểm chứng (lỗi script test): heartbeat stale đúng lúc reserve → fresh heartbeat + re-affirm AVAILABLE ngay trước create_trip; accept yêu cầu body `{"attempt":N}` và start/complete trả 200 (không 202); block accept/start/complete cũ sót sau thay thế awk trong r02 (xóa dòng 282–291); cancel chấp nhận cả 200|202 theo contract §3.3. Không có lỗi product trong phạm vi T31.
+
+## Lượt 2026-10-30 — T32: Security và input tests (S01/S02) — DONE
+
+Chi tiết: [T32](tasks/T32.md).
+
+### Việc đã làm
+- `scripts/security-s01.sh` (mới): 9 probe authn/authz (no/garbage token, role sai ×4, owner lạ ×2, login sai mật khẩu) + snapshot trips/drivers trước/sau.
+- `scripts/security-s02.sh` (mới): 7 probe input/payload/transition (tọa độ sai ×3, body ~200 KiB, transition sai ×3) + luồng positive COMPLETED + assertions DB bad_rows=0, total trips chỉ +1, completed +1; B1 qua `curl -d @file` (argv limit Git Bash).
+- Raw results: `tests/security/s01-results.jsonl`, `s01-summary.txt`, `s02-results.jsonl`, `s02-summary.txt`.
+
+| Lệnh | Kết quả |
+|---|---|
+| `bash scripts/security-s01.sh` | **PASS** — 9/9 probe (P1/P2 401 UNAUTHORIZED, P3–P6 403 FORBIDDEN, P7/P8 404 NOT_FOUND, P9 401 INVALID_CREDENTIALS); snapshot dữ liệu trước=sau (~11 s) |
+| `bash scripts/security-s02.sh` | **PASS** — 7/7 probe (Q1/C1/C2 400 INVALID_INPUT, B1 413 PAYLOAD_TOO_LARGE, T1/T3 409 STATE_CONFLICT, T2 409 NOT_OFFERED_DRIVER); positive trip COMPLETED; bad_rows=0, total trips chỉ +1 (70→71), completed +1 (17→18) (~15 s) |
+
+Lỗi sửa trong lúc kiểm chứng (lỗi script test): B1 argv limit → `post_create_file()` với `-d @file`; block accept/start/complete cũ sót sau thay thế awk trong s02 — call accept không body trả 400 "Malformed request body" (xóa dòng 309–319); kỳ vọng P9 sửa thành INVALID_CREDENTIALS theo contract §3.1. Không có lỗi product trong phạm vi T32.
+
+## Lượt 2026-10-30 — Rà soát và sửa T27–T32
+
+Chi tiết: [T27-T32_REVIEW_FIXES](T27-T32_REVIEW_FIXES.md).
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` | **BUILD SUCCESS, 375 tests / 0 failures** (identity 38, driver 123, trip 155, matching 26, payment 33) |
+| `npm test` + `npm run build` | **98/98**, build pass |
+| `node tests/e2e/ui-flow.cjs` | **13/13** trên headless Chrome qua Nginx :8080 |
+| `bash scripts/concurrency-c01.sh` | **20/20**; 0 reservation chồng nhau, 0 orphan; A/B thắng 17/3 |
+| `bash scripts/concurrency-c02.sh` | **20/20**; accept/cancel thắng 14/6; 9 lượt chồng nhau |
+| `bash scripts/recovery-r01.sh` | **PASS** (lần đầu fail do heartbeat quá hạn trong script, đã sửa) |
+| `bash scripts/recovery-r02.sh` | **PASS** |
+| `bash scripts/security-s01.sh` / `security-s02.sh` | **17/17** / **7/7** |
+| Bản sao sạch (`build --no-cache`, key + `.env` mới, volume riêng) | **PASS** sau khi sửa lỗi `COPY src/web/public/` |
+

@@ -1,0 +1,35 @@
+# DS03 — T29: backend image dùng chung cho cả 5 services.
+# Build toàn bộ reactor (5 modules) trong MỘT lần maven run -> một runtime image chứa 5 jars;
+# compose chạy 5 container từ cùng image, mỗi container một `command: java -jar /app/<svc>.jar` riêng
+# (tiến trình độc lập, DB/queue/port riêng — spec §10). Nhanh hơn 5 build maven riêng vì chỉ tải
+# dependencies một lần.
+# F32: pin patch version đầy đủ.
+FROM maven:3.10.0-eclipse-temurin-21 AS builder
+WORKDIR /build
+COPY pom.xml ./pom.xml
+COPY src/identity-service/ ./src/identity-service/
+COPY src/driver-service/ ./src/driver-service/
+COPY src/trip-service/ ./src/trip-service/
+COPY src/matching-service/ ./src/matching-service/
+COPY src/payment-service/ ./src/payment-service/
+# -DskipTests: test chạy trên host qua mvnw (Testcontainers); image chỉ cần jars runtime.
+RUN mvn -B -ntp clean package -DskipTests
+
+FROM eclipse-temurin:21.0.13_9-jre
+WORKDIR /app
+# curl — healthcheck HTTP probe /actuator/health/readiness trong compose (N17/C06).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/src/identity-service/target/identity-service-0.1.0.jar ./identity-service.jar
+COPY --from=builder /build/src/driver-service/target/driver-service-0.1.0.jar ./driver-service.jar
+COPY --from=builder /build/src/trip-service/target/trip-service-0.1.0.jar ./trip-service.jar
+COPY --from=builder /build/src/matching-service/target/matching-service-0.1.0.jar ./matching-service.jar
+COPY --from=builder /build/src/payment-service/target/payment-service-0.1.0.jar ./payment-service.jar
+
+# Image KHÔNG chứa JWT key: compose bind-mount read-only đúng key cần cho từng service
+# (private CHỈ identity-service). Yml đọc `keys/jwt-*.pem` tương đối WORKDIR (/app/keys).
+# Chạy non-root; Linux host: xem HOST_UID/HOST_GID trong .env.example.
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+USER 10001:10001

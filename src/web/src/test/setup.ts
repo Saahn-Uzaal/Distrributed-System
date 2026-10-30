@@ -15,3 +15,11 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
       dispatchEvent: () => false
     }) as unknown as MediaQueryList
 }
+
+// findBy*/waitFor mặc định chờ 1 s — không đủ cho render antd khi máy bận.
+if (typeof window !== 'undefined') {
+  const { configure } = await import('@testing-library/react')
+  configure({ asyncUtilTimeout: 5000 })
+}
+
+export {}

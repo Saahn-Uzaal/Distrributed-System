@@ -1,6 +1,7 @@
 server:
   port: 8083
-  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt SERVER_ADDRESS=0.0.0.0 nhưng không publish port.
+  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt
+  # SERVER_ADDRESS=0.0.0.0 và publish port CHỈ 127.0.0.1 (dev/debug — health links demo, xem compose).
   address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
@@ -16,7 +17,8 @@ spring:
     # N09: không có giá trị mặc định cho mật khẩu — thiếu env thì RequiredDbPasswordValidator dừng startup.
     password: ${RABBITMQ_PASSWORD:}
   datasource:
-    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/trip_db
+    # T29: DB_HOST env (compose đặt postgres; mặc định localhost giữ hành vi chạy local).
+    url: jdbc:postgresql://${DB_HOST:localhost}:${POSTGRES_PORT:5432}/trip_db
     username: trip_svc
     # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
     password: ${TRIP_DB_PASSWORD}

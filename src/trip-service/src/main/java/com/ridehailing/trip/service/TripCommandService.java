@@ -153,6 +153,10 @@ public class TripCommandService {
         if ("ACCEPTED".equals(trip.state()) && caller.equals(trip.driverUserId()) && trip.matchingAttempt() == attempt) {
             return new AcceptPlan("ACCEPTED", null, null);
         }
+        Map<String, Object> ctx = readContext(saga.contextJson());
+        if (!wasOfferedTo(trip, ctx, caller)) {
+            throw notOffered(tripId, attempt); // người ngoài không được biết state của trip
+        }
         if (!"DRIVER_OFFERED".equals(trip.state())) {
             throw stateConflict(trip, "Trip is not waiting for a driver to accept.");
         }
@@ -160,7 +164,6 @@ public class TripCommandService {
             throw notOffered(tripId, attempt);
         }
 
-        Map<String, Object> ctx = readContext(saga.contextJson());
         switch (saga.phase()) {
             case "WAITING_DRIVER" -> {
                 ctx.put("intent", "ACCEPT");
@@ -349,6 +352,9 @@ public class TripCommandService {
                 && last.get("attempt") instanceof Number n && n.intValue() == attempt) {
             return new RejectPlan(trip.state(), trip.matchingAttempt(), null, null);
         }
+        if (!wasOfferedTo(trip, ctx, caller)) {
+            throw notOffered(tripId, attempt); // người ngoài không được biết state của trip
+        }
         if (!"DRIVER_OFFERED".equals(trip.state())) {
             throw stateConflict(trip, "Trip has no pending offer to reject.");
         }
@@ -453,6 +459,7 @@ public class TripCommandService {
             ctx.remove(key);
         }
         ctx.put("excludedDriverIds", excluded);
+        rememberFormerDriver(ctx, driverUserId);
         if (userReject) {
             Map<String, Object> lastRejection = new LinkedHashMap<>();
             lastRejection.put("driverUserId", driverUserId.toString());
@@ -872,6 +879,9 @@ public class TripCommandService {
                 .orElseThrow(() -> new TripNotFoundException("Trip not found."));
         TripRepository.TripRow trip = tripRepo.findById(tripId)
                 .orElseThrow(() -> new TripNotFoundException("Trip not found."));
+        if (!wasOfferedTo(trip, readContext(saga.contextJson()), caller)) {
+            throw notAssignedDriver(tripId); // người ngoài không được biết state của trip
+        }
         if (!"ACCEPTED".equals(trip.state())) {
             throw stateConflict(trip, "Trip must be ACCEPTED before start.");
         }
@@ -927,13 +937,16 @@ public class TripCommandService {
                 .orElseThrow(() -> new TripNotFoundException("Trip not found."));
         TripRepository.TripRow trip = tripRepo.findById(tripId)
                 .orElseThrow(() -> new TripNotFoundException("Trip not found."));
+        Map<String, Object> ctx = readContext(saga.contextJson());
+        if (!wasOfferedTo(trip, ctx, caller)) {
+            throw notAssignedDriver(tripId); // người ngoài không được biết state của trip
+        }
         if (!"IN_PROGRESS".equals(trip.state())) {
             throw stateConflict(trip, "Trip must be IN_PROGRESS before complete.");
         }
         if (!caller.equals(trip.driverUserId())) {
             throw notAssignedDriver(tripId);
         }
-        Map<String, Object> ctx = readContext(saga.contextJson());
         UUID reservationId = uuid(ctx, "reservationId");
         // Chốt T22: intent finish bền — saga AWAITING_FINISH + desired FINISH_ASSIGNMENT;
         // worker resume nếu HTTP chưa rõ (state-machines.md §2).
@@ -1062,6 +1075,29 @@ public class TripCommandService {
     // =====================================================================================
     // helpers
     // =====================================================================================
+
+    /**
+     * Caller có từng được offer trip này không. Chỉ những driver này mới được phân biệt các state qua
+     * 409 STATE_CONFLICT (kể cả sau khi cancel/reject/hết hạn đã xóa driver_user_id); người ngoài chỉ
+     * nhận NOT_OFFERED_DRIVER/NOT_ASSIGNED_DRIVER, không lộ state.
+     */
+    private static boolean wasOfferedTo(TripRepository.TripRow trip, Map<String, Object> ctx, UUID caller) {
+        String id = caller.toString();
+        return caller.equals(trip.driverUserId())
+                || id.equals(ctx.get("driverUserId"))
+                || (ctx.get("formerDriverUserIds") instanceof List<?> former && former.contains(id));
+    }
+
+    private static void rememberFormerDriver(Map<String, Object> ctx, UUID driverUserId) {
+        List<Object> former = new ArrayList<>();
+        if (ctx.get("formerDriverUserIds") instanceof List<?> list) {
+            former.addAll(list);
+        }
+        if (!former.contains(driverUserId.toString())) {
+            former.add(driverUserId.toString());
+        }
+        ctx.put("formerDriverUserIds", former);
+    }
 
     private static void requireAttempt(Integer attempt) {
         if (attempt == null || attempt < 1) {

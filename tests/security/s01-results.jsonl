@@ -1,0 +1,17 @@
+{"probe":"P1","label":"no token","method":"GET","path":"/api/trips","status":401,"code":"UNAUTHORIZED"}
+{"probe":"P2","label":"garbage token","method":"GET","path":"/api/trips","status":401,"code":"UNAUTHORIZED"}
+{"probe":"P3","label":"passenger -> driver endpoint (state-changing)","method":"PUT","path":"/api/drivers/me/availability","status":403,"code":"FORBIDDEN"}
+{"probe":"P4","label":"passenger -> driver offer","method":"GET","path":"/api/drivers/me/offer","status":403,"code":"FORBIDDEN"}
+{"probe":"P5","label":"driver -> create trip (valid body)","method":"POST","path":"/api/trips","status":403,"code":"FORBIDDEN"}
+{"probe":"P6","label":"driver -> cancel passenger's trip","method":"POST","path":"/api/trips/5b4a23df-e7c4-4ff5-afcd-1c6a9f0cdc1d/cancel","status":403,"code":"FORBIDDEN"}
+{"probe":"P7","label":"stranger -> other's trip detail","method":"GET","path":"/api/trips/5b4a23df-e7c4-4ff5-afcd-1c6a9f0cdc1d","status":404,"code":"NOT_FOUND"}
+{"probe":"P8","label":"stranger -> other's trip events","method":"GET","path":"/api/trips/5b4a23df-e7c4-4ff5-afcd-1c6a9f0cdc1d/events","status":404,"code":"NOT_FOUND"}
+{"probe":"P9","label":"login wrong password","method":"POST","path":"/api/auth/login","status":401,"code":"INVALID_CREDENTIALS"}
+{"probe":"P10","label":"token alg=none","method":"GET","path":"/api/trips","status":401,"code":"UNAUTHORIZED"}
+{"probe":"P11","label":"token chữ ký sai","method":"GET","path":"/api/trips","status":401,"code":"UNAUTHORIZED"}
+{"probe":"P12","label":"token alg=HS256","method":"GET","path":"/api/trips","status":401,"code":"UNAUTHORIZED"}
+{"probe":"P13","label":"passenger lạ cancel trip đang offer","method":"POST","path":"/api/trips/319abab4-47dd-49c1-8ea5-fd231da5eea7/cancel","status":404,"code":"NOT_FOUND"}
+{"probe":"P14","label":"driver lạ accept","method":"POST","path":"/api/trips/319abab4-47dd-49c1-8ea5-fd231da5eea7/accept","status":409,"code":"NOT_OFFERED_DRIVER"}
+{"probe":"P15","label":"driver lạ reject","method":"POST","path":"/api/trips/319abab4-47dd-49c1-8ea5-fd231da5eea7/reject","status":409,"code":"NOT_OFFERED_DRIVER"}
+{"probe":"P16","label":"driver lạ start","method":"POST","path":"/api/trips/319abab4-47dd-49c1-8ea5-fd231da5eea7/start","status":409,"code":"NOT_ASSIGNED_DRIVER"}
+{"probe":"P17","label":"driver lạ complete","method":"POST","path":"/api/trips/319abab4-47dd-49c1-8ea5-fd231da5eea7/complete","status":409,"code":"NOT_ASSIGNED_DRIVER"}

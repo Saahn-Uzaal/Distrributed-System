@@ -62,7 +62,38 @@ Nếu broker đã chạy sẵn và volume bị reset khi container còn sống, 
 - Declare qua AMQP (escript dùng `amqp_client` có sẵn trong image rabbitmq, chạy one-off container trên network `ridehailing_net`) — không phụ thuộc HTTP API.
 - Management UI: http://localhost:15672 (credentials dev trong `.env`). Message persistent + durable topology đã probe qua restart broker (chi tiết: `docs/tasks/T04.md`).
 
-## Chạy services (local) — runbook đầy đủ (cập nhật 2026-10-19, đợt sửa F07)
+## Chạy toàn hệ thống bằng Docker Compose (T29) — cách chính
+
+Yêu cầu: **Docker Desktop đang chạy** (`docker ps` để kiểm tra), **Git Bash** (Windows). Không cần JDK/Maven/Node trên host — build backend (Maven reactor 5 modules → 1 image dùng chung) và frontend (Vite → nginx image) đều chạy trong Docker.
+
+```bash
+cp .env.example .env          # giá trị dev-only; KHÔNG dùng cho production
+bash scripts/generate-dev-keys.sh   # keys/jwt-*.pem (gitignored) — cần TRƯỚC khi build backend image
+docker compose --env-file .env -f deploy/compose.yaml up --build -d
+# kiểm tra: mọi container healthy (readiness probe gồm DB thật, N17/C06):
+docker compose --env-file .env -f deploy/compose.yaml ps
+```
+
+- 5 services chạy là **container độc lập** từ cùng image `ridehailing-backend:0.1.0` (`deploy/docker/Dockerfile.backend` — một lần build Maven reactor cho cả 5 modules), mỗi container một `command: java -jar /app/<svc>.jar`. Frontend + proxy conf bake vào image `ridehailing-web:0.1.0` (`deploy/docker/Dockerfile.web`) — không còn bind-mount dist hay `host.docker.internal`.
+- JWT key **không** nằm trong image: compose bind-mount read-only — private key chỉ vào `identity-service`, public key vào `identity`/`driver`/`trip`; `matching`/`payment` không có key. Container backend chạy non-root. Linux host: đặt `HOST_UID`/`HOST_GID` theo `id -u`/`id -g` (`.env.example`) để `identity-service` đọc được private key mode 600.
+- Biến trong `.env` (`FARE_*`, `RESERVATION_EXPIRY_*`, `JWT_EXPIRES_IN_SECONDS`, `TRIP_MATCH_DEADLINE_SECONDS`, `PAYMENT_SIMULATE_FAIL_RATE`) được compose truyền vào container; demo payment thất bại: đặt `PAYMENT_SIMULATE_FAIL_RATE=1` rồi `up -d payment-service`.
+- Public port duy nhất của hệ thống: **8080** (Nginx). Các port 8081–8085 publish **CHỈ 127.0.0.1** (dev/debug — links health demo từ host browser); `/actuator/*` và `/internal/*` trả 404 qua :8080 (private routes không lộ).
+- `DB_HOST`, `RABBITMQ_HOST`, `DRIVER_SERVICE_URL` được compose đặt sang DNS tên service (`postgres`, `rabbitmq`, `driver-service`) — services nói chuyện nhau qua network `ridehailing_net`.
+
+Sau khi hệ thống healthy:
+
+```bash
+bash scripts/seed-demo.sh            # 3 passengers + 3 drivers (idempotent)
+bash scripts/smoke-trip.sh           # full trip ~10–15 s, payment SUCCEEDED
+# demo overview UI: mở http://localhost:8080/demo sau khi login (passenger/driver)
+bash scripts/correlation-filter.sh <correlation-id>   # grep logs 5 services + nginx theo correlationId
+```
+
+Reset dữ liệu dev: `bash scripts/reset-demo.sh --confirm` (hủy trip chưa terminal của demo users, đưa drivers về AVAILABLE — không chạm volume).
+
+## Chạy services local trên host (chế độ dev cũ — tùy chọn)
+
+> Sau T29, cách chính là Docker Compose toàn hệ thống ở mục trên. Chế độ này chỉ còn dùng khi phát triển/debug **một service riêng lẻ** hoặc chạy test; Nginx image proxy sang DNS compose nên full stack qua :8080 yêu cầu backend containerized. Khi chạy Java trên host, chỉ bật hạ tầng (`docker compose --env-file .env -f deploy/compose.yaml up -d postgres rabbitmq topo-declare`) — các port 8081–8085 của backend container sẽ trùng với tiến trình local — và dùng Vite (mục 6) thay cho Nginx.
 
 Yêu cầu trên host: **JDK 21**, **Docker Desktop đang chạy** (`docker ps` để kiểm tra), **Git Bash** (Windows), **OpenSSL** (sinh JWT keys). Dùng Maven Wrapper — không cần cài Maven.
 
@@ -141,21 +172,19 @@ Không in secret (mật khẩu, key) ra console khi minh họa.
 
 Mỗi service chạy trên port riêng (bảng ở trên). Health endpoint: `/actuator/health`.
 
-### 6. Frontend và Nginx (T08)
+### 6. Frontend (T08) và Nginx (T29)
 ```bash
-cd src/web && npm install && npm run build   # -> src/web/dist (build TRƯỚC khi up nginx — dist được bind-mount)
-cd ..
-docker compose --env-file .env -f deploy/compose.yaml up -d nginx
-# mở http://localhost:8080 — login/register thật, route theo role
+cd src/web && npm install && npm run dev   # http://localhost:5173 — proxy /api/* tới service local :8081/:8082/:8083
 ```
-- Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|notifications` tới services local trên host (dev mode qua `host.docker.internal`; T29 đổi sang DNS compose khi container hóa services). Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON với correlationId do Nginx tự sinh/giữ (`error_page 413` + biến `$cid` — không cần trang lỗi tĩnh). Lỗi upstream 502/503/504 và rate limit cũng trả JSON `UPSTREAM_UNAVAILABLE` / `RATE_LIMITED` theo contract §1.2; Nginx giữ/sinh correlation ID (`$request_id_uuid`) cho mọi request và ghi vào access log.
-- **N02 — binding loopback:** mỗi service bind chỉ loopback bằng mặc định (`server.address: ${SERVER_ADDRESS:127.0.0.1}`); cổng 8081–8085 không mở ra LAN (netstat: chỉ `127.0.0.1:<port> LISTENING`). Trên Docker Desktop (Windows/Mac), `host.docker.internal` được route về loopback của host nên gateway :8080 **vẫn chạy** với binding mặc định (đã kiểm chứng 2026-10-21: driver trên `127.0.0.1:8082` reach từ container nginx; `curl http://localhost:8080/api/drivers/status` → 401 JSON qua nginx). Khi chạy services trong container (T29): set `SERVER_ADDRESS=0.0.0.0` và KHÔNG publish port.
+Nginx không còn dùng được ở chế độ này: frontend + `deploy/nginx.conf` được bake vào image `ridehailing-web` và proxy sang DNS service compose (mục "Chạy toàn hệ thống").
+- Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|notifications` tới **upstream DNS tên service compose** (`identity-service:8081`, `driver-service:8082`, `trip-service:8083`) — T29; `server ... resolve` nên gateway không crash khi backend chưa chạy và theo IP mới khi container được recreate. Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON với correlationId do Nginx tự sinh/giữ (`error_page 413` + biến `$cid` — không cần trang lỗi tĩnh). Lỗi upstream 502/503/504 và rate limit cũng trả JSON `UPSTREAM_UNAVAILABLE` / `RATE_LIMITED` theo contract §1.2; Nginx giữ/sinh correlation ID (`$request_id_uuid`) cho mọi request và ghi vào access log.
+- **N02 — binding loopback:** mỗi service bind chỉ loopback bằng mặc định khi chạy local (`server.address: ${SERVER_ADDRESS:127.0.0.1}`); trong container (T29) compose đặt `SERVER_ADDRESS=0.0.0.0` và publish port **CHỈ 127.0.0.1** — không mở ra LAN, không expose qua :8080.
 - Services log structured JSON (spec §11); env tùy chọn `INSTANCE_ID` đặt instanceId trong log (mặc định = UUID per JVM).
 - Dev server: `npm run dev` ở `src/web/` (:5173, có proxy `/api/*` tới :8081/:8082/:8083) — không cần nginx khi phát triển UI.
 - Token lưu trong sessionStorage; không log token (source + access log Nginx đều không chứa).
 
 ### 7. Seed & smoke demo (T26)
-Sau khi hạ tầng + 5 services chạy, seed 3 passengers/3 drivers và smoke một chuyến hoàn chỉnh — chỉ qua public API của Nginx :8080, không ghi DB trực tiếp, không chạm volume:
+Sau khi hạ tầng + 5 services chạy, seed 3 passengers/3 drivers và smoke một chuyến hoàn chỉnh — chỉ qua public API của Nginx :8080 (chạy Java trên host thì truyền `http://localhost:5173`, Vite proxy), không ghi DB trực tiếp, không chạm volume:
 
 ```bash
 bash scripts/seed-demo.sh            # idempotent: chạy lại không tạo trùng (409 EMAIL_TAKEN -> skip)

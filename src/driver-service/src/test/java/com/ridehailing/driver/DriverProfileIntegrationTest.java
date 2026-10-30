@@ -401,6 +401,70 @@ class DriverProfileIntegrationTest {
         assertThat(loc.status()).isEqualTo(404);
     }
 
+    // --- GET /api/drivers/me ---
+
+    @org.junit.jupiter.api.Test
+    void getMeReturnsServerStateWithoutTouchingHeartbeat() throws Exception {
+        UUID user = UUID.randomUUID();
+        Instant seen = Instant.parse("2026-10-20T01:02:03Z");
+        UUID driverId = seedDriver(user, "OFFLINE", seen, 21.03, 105.84);
+        String token = signToken(user, "DRIVER", user + "@t9.test");
+
+        Resp me = send("GET", "/api/drivers/me", token, null, null);
+
+        assertThat(me.status()).isEqualTo(200);
+        assertThat(me.body().get("driverId")).isEqualTo(driverId.toString());
+        assertThat(me.body().get("displayName")).isEqualTo("Seed Driver");
+        assertThat(me.body().get("status")).isEqualTo("OFFLINE");
+        assertThat(me.body().get("latitude")).isEqualTo(21.03);
+        assertThat(me.body().get("longitude")).isEqualTo(105.84);
+        assertThat(me.body()).containsKey("tripId");
+        assertThat(me.body().get("tripId")).isNull();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> vehicle = (Map<String, Object>) me.body().get("vehicle");
+        assertThat(vehicle.get("vehicleType")).isEqualTo("CAR");
+
+        // Chỉ đọc: tải lại trang không được đổi OFFLINE thành AVAILABLE hay làm mới heartbeat.
+        Map<String, Object> row = jdbc.queryForMap("SELECT status, last_seen_at FROM drivers WHERE id = ?", driverId);
+        assertThat(row.get("status")).isEqualTo("OFFLINE");
+        assertThat(((Timestamp) row.get("last_seen_at")).toInstant()).isEqualTo(seen);
+    }
+
+    @org.junit.jupiter.api.Test
+    void getMeExposesRelatedTripForReservedAndBusy() throws Exception {
+        UUID user = UUID.randomUUID();
+        UUID driverId = createProfileViaApi(user, "Driver A", "51A-123.45", "MOTORBIKE");
+        String token = signToken(user, "DRIVER", user + "@t9.test");
+        UUID reservationId = UUID.randomUUID(), tripId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO reservations (id, trip_id, driver_id, attempt, state, expires_at, last_command_version,"
+                        + " pickup_lat, pickup_lng, destination_lat, destination_lng, distance_m, fare_vnd)"
+                        + " VALUES (?, ?, ?, 1, 'RESERVED', now() + interval '30 seconds', 1, 10.7, 106.7, 10.8, 106.8, 1500, 45000)",
+                reservationId, tripId, driverId);
+        jdbc.update("UPDATE drivers SET status = 'RESERVED', current_reservation_id = ? WHERE id = ?", reservationId, driverId);
+
+        Resp reserved = send("GET", "/api/drivers/me", token, null, null);
+        assertThat(reserved.body().get("status")).isEqualTo("RESERVED");
+        assertThat(reserved.body().get("tripId")).isEqualTo(tripId.toString());
+
+        jdbc.update("UPDATE drivers SET status = 'BUSY', current_trip_id = ? WHERE id = ?", tripId, driverId);
+        Resp busy = send("GET", "/api/drivers/me", token, null, null);
+        assertThat(busy.body().get("status")).isEqualTo("BUSY");
+        assertThat(busy.body().get("tripId")).isEqualTo(tripId.toString());
+    }
+
+    @org.junit.jupiter.api.Test
+    void getMeRequiresProfileAndDriverRole() throws Exception {
+        UUID user = UUID.randomUUID();
+        Resp noProfile = send("GET", "/api/drivers/me", signToken(user, "DRIVER", user + "@t9.test"), null, null);
+        assertThat(noProfile.status()).isEqualTo(404);
+        assertThat(noProfile.body().get("code")).isEqualTo("NOT_FOUND");
+
+        Resp passenger = send("GET", "/api/drivers/me", signToken(user, "PASSENGER", user + "@t9.test"), null, null);
+        assertThat(passenger.status()).isEqualTo(403);
+        assertThat(send("GET", "/api/drivers/me", null, null, null).status()).isEqualTo(401);
+    }
+
     // --- location ---
 
     @org.junit.jupiter.api.Test

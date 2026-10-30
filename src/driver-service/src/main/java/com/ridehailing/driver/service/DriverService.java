@@ -35,6 +35,11 @@ public class DriverService {
         }
     }
 
+    /** GET /api/drivers/me: state hiện tại do server giữ — client đọc khi tải lại, không suy từ cache. */
+    public record DriverState(UUID driverId, String displayName, Profile.Vehicle vehicle, String status,
+                              Double latitude, Double longitude, Instant lastSeenAt, UUID tripId) {
+    }
+
     public record AvailabilityResult(UUID driverId, String status, Instant lastSeenAt) {
     }
 
@@ -99,6 +104,25 @@ public class DriverService {
     public record ProfileResult(UUID driverId, boolean created, Profile profile) {
     }
 
+    /** GET /api/drivers/me — chỉ đọc: không đổi heartbeat hay state. Chưa có profile → 404. */
+    public DriverState currentState(UUID userId) {
+        DriverRepository.DriverRow driver = repo.findByUserId(userId)
+                .orElseThrow(() -> new NotFoundException("Driver profile not found."));
+        Profile profile = toProfile(driver);
+        return new DriverState(driver.id(), driver.displayName(), profile.vehicle(), driver.status(),
+                driver.latitude(), driver.longitude(), driver.lastSeenAt(), relatedTripId(driver));
+    }
+
+    /** tripId từ current_trip_id, hoặc từ reservation của current_reservation_id nếu RESERVED. */
+    private UUID relatedTripId(DriverRepository.DriverRow driver) {
+        if (driver.currentTripId() != null || driver.currentReservationId() == null) {
+            return driver.currentTripId();
+        }
+        return reservationRepo.findById(driver.currentReservationId())
+                .map(ReservationRepository.ReservationRow::tripId)
+                .orElse(null);
+    }
+
     /** PUT /api/drivers/me/availability — CAS theo state machine §4. */
     @Transactional
     public AvailabilityResult setAvailability(UUID userId, String status) {
@@ -115,15 +139,9 @@ public class DriverService {
             // (tripId từ current_trip_id, hoặc từ reservation của current_reservation_id nếu RESERVED).
             DriverRepository.DriverRow fresh = repo.findById(driver.id())
                     .orElseThrow(() -> new NotFoundException("Driver profile not found."));
-            UUID tripId = fresh.currentTripId();
-            if (tripId == null && fresh.currentReservationId() != null) {
-                tripId = reservationRepo.findById(fresh.currentReservationId())
-                        .map(ReservationRepository.ReservationRow::tripId)
-                        .orElse(null);
-            }
             Map<String, Object> details = new LinkedHashMap<>();
             details.put("state", fresh.status());
-            details.put("tripId", tripId);
+            details.put("tripId", relatedTripId(fresh));
             throw new StateConflictException(
                     "Driver is not free to change availability while " + fresh.status() + ".", details);
         }

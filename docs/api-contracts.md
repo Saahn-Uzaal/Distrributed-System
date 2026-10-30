@@ -128,6 +128,15 @@ Request: `{"email":"...","password":"..."}`
 
 Tất cả endpoint dưới đây yêu cầu role `DRIVER` (passenger gọi → 403 `FORBIDDEN`).
 
+#### GET /api/drivers/me
+Trạng thái hiện tại của driver đang đăng nhập — nguồn sự thật cho UI khi tải lại. **Chỉ đọc:** không đổi state, không cập nhật heartbeat.
+- **200**
+```json
+{"driverId":"uuid","displayName":"Driver A","vehicle":{"plateNumber":"51A-123.45","vehicleType":"MOTORBIKE"},"status":"RESERVED","latitude":10.7769,"longitude":106.7009,"lastSeenAt":"2026-10-18T09:30:00Z","tripId":"uuid-hoac-null"}
+```
+- `tripId`: trip đang gắn với driver (`RESERVED`: từ reservation hiện tại; `BUSY`: `current_trip_id`), còn lại `null`. `latitude`/`longitude`/`lastSeenAt` là `null` khi chưa từng cập nhật.
+- 404 `NOT_FOUND` khi chưa có profile.
+
 #### POST /api/drivers/me/profile
 Request:
 ```json
@@ -250,6 +259,7 @@ Request: `{"attempt":1}` — phải khớp attempt của offer hiện tại.
 - Caller role không phải DRIVER: 403 `FORBIDDEN`.
 - Driver khác với người được offer cho trip+attempt đó: 409 `NOT_OFFERED_DRIVER`.
 - Offer đã hết hạn/đã release: 409 `STATE_CONFLICT` (details: state).
+- **Chốt rà soát T32 (2026-10-30):** chỉ driver từng được offer trip này mới nhận `STATE_CONFLICT` kèm state; driver không liên quan luôn nhận `NOT_OFFERED_DRIVER` (start/complete: `NOT_ASSIGNED_DRIVER`) ở mọi state — không lộ state trip của người khác (cùng tinh thần §1.2).
 - **Chốt T18 (2026-10-25):**
   - Trip ghi intent ACCEPT (saga WAITING_DRIVER → CONFIRMING) trong transaction khóa row saga, rồi mới gọi confirm (version 2, commandId `UUID v3("CMD-CONFIRM|<reservationId>")`) ngoài transaction. ACCEPTED chỉ được ghi sau khi Driver xác nhận; saga chuyển `AWAITING_FINISH` (desired `NONE`) chờ complete (T22).
   - Timeout/5xx khi confirm → GET reservation: CONFIRMED khớp → ACCEPTED; vẫn RESERVED → gửi lại confirm một lần cùng commandId; vẫn không rõ → 202 `DRIVER_OFFERED`, intent giữ trong saga; gọi accept lại để tiếp tục. Không bao giờ ghi ACCEPTED khi chưa thấy CONFIRMED.

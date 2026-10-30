@@ -75,6 +75,22 @@ class TripStartCompleteIntegrationTest extends TripCommandTestSupport {
         assertThat(DRIVER.reservation(o.reservationId().toString()).terminalReason).isEqualTo("TRIP_COMPLETED");
     }
 
+    /** Driver không liên quan không phân biệt được state của trip người khác qua lỗi trả về. */
+    @Test
+    void strangerDriverLearnsNothingAboutTripState() throws Exception {
+        Offered o = startedTrip();
+        UUID stranger = UUID.randomUUID();
+        for (Resp r : List.of(start(o.tripId(), stranger), complete(o.tripId(), stranger))) {
+            assertThat(r.status()).isEqualTo(409);
+            assertThat(r.body()).containsEntry("code", "NOT_ASSIGNED_DRIVER");
+            assertThat(String.valueOf(r.body().get("details"))).doesNotContain("IN_PROGRESS");
+        }
+        assertThat(complete(o.tripId(), o.driverUserId()).status()).isEqualTo(200);
+        for (Resp r : List.of(start(o.tripId(), stranger), complete(o.tripId(), stranger))) {
+            assertThat(r.body()).containsEntry("code", "NOT_ASSIGNED_DRIVER");
+        }
+    }
+
     @Test
     void completeByWrongDriverDoesNotCreatePaymentOrFinishIntent() throws Exception {
         Offered o = startedTrip();

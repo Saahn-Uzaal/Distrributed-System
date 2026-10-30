@@ -26,7 +26,9 @@ export class ApiError extends Error {
   constructor(
     public readonly code: string,
     message: string,
-    public readonly correlationId?: string
+    public readonly correlationId?: string,
+    /** contract §1.1 — details (vd STATE_CONFLICT driver: {state, tripId}). */
+    public readonly details?: unknown
   ) {
     super(message)
     this.name = 'ApiError'
@@ -43,9 +45,11 @@ export interface RegisterBody {
   role: Role
 }
 
-interface RequestOptions {
+export interface RequestOptions {
   method?: string
   body?: unknown
+  /** T27 — header bổ sung (vd Idempotency-Key cho POST /api/trips). */
+  extraHeaders?: Record<string, string>
   authenticated?: boolean
   /** N34 — timeout riêng cho call này (test); mặc định REQUEST_TIMEOUT_MS. */
   timeoutMs?: number
@@ -53,7 +57,8 @@ interface RequestOptions {
   signal?: AbortSignal
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/** T27 — HTTP client dùng chung cho mọi module API (trips/drivers). */
+export async function http<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const session = loadSession()
   // F15: ghi lại token ĐÃ GỬI đi; chỉ xóa session nếu token đang lưu vẫn là token đó.
   const sentToken = session?.token ?? null
@@ -63,6 +68,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     'X-Correlation-ID': newUuid()
   }
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (options.extraHeaders) {
+    for (const [name, value] of Object.entries(options.extraHeaders)) headers[name] = value
+  }
   if (options.authenticated !== false && session) {
     // Token chỉ đi trong header Authorization — không log, không console.
     headers['Authorization'] = `Bearer ${session.token}`
@@ -115,8 +123,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       const current = loadSession()
       if (current?.token === sentToken) clearSession()
     }
-    const err = (data ?? {}) as { code?: string; message?: string; correlationId?: string }
-    throw new ApiError(err.code ?? 'UNKNOWN', err.message ?? `HTTP ${resp.status}`, err.correlationId)
+    const err = (data ?? {}) as { code?: string; message?: string; correlationId?: string; details?: unknown }
+    throw new ApiError(err.code ?? 'UNKNOWN', err.message ?? `HTTP ${resp.status}`, err.correlationId, err.details)
   }
 
   return data as T
@@ -124,12 +132,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export const api = {
   register(body: RegisterBody, signal?: AbortSignal): Promise<{ user: SessionUser }> {
-    return request('/api/auth/register', { method: 'POST', body, authenticated: false, signal })
+    return http('/api/auth/register', { method: 'POST', body, authenticated: false, signal })
   },
   login(email: string, password: string, signal?: AbortSignal): Promise<{ accessToken: string; expiresIn: number; user: SessionUser }> {
-    return request('/api/auth/login', { method: 'POST', body: { email, password }, authenticated: false, signal })
+    return http('/api/auth/login', { method: 'POST', body: { email, password }, authenticated: false, signal })
   },
   me(): Promise<SessionUser> {
-    return request('/api/auth/me')
+    return http('/api/auth/me')
   }
 }

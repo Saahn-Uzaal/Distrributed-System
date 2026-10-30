@@ -1,13 +1,15 @@
 server:
   port: 8082
-  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt SERVER_ADDRESS=0.0.0.0 nhưng không publish port.
+  # N02 (T07-2): mặc định bind loopback — không mở cổng ra LAN; container hóa (T29) đặt
+  # SERVER_ADDRESS=0.0.0.0 và publish port CHỈ 127.0.0.1 (dev/debug — health links demo, xem compose).
   address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
   application:
     name: driver-service
   datasource:
-    url: jdbc:postgresql://localhost:${POSTGRES_PORT:5432}/driver_db
+    # T29: DB_HOST env (compose đặt postgres; mặc định localhost giữ hành vi chạy local).
+    url: jdbc:postgresql://${DB_HOST:localhost}:${POSTGRES_PORT:5432}/driver_db
     username: driver_svc
     # N09 fix: KHÔNG có dev default — thiếu env thì service dừng với thông báo nêu tên biến.
     password: ${DRIVER_DB_PASSWORD}

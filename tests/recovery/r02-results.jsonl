@@ -1,0 +1,1 @@
+{"tripId":"8fd11495-e357-4e5d-9674-050d72f35563","failpoint_ms":8000,"payments_rows":1,"inbox_events_rows":1,"outbox_events":1,"trip_payment_events":1,"payment_status":"SUCCEEDED","redelivery_pending_after_kill":true,"dedup_log_found":true}

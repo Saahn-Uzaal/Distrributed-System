@@ -1,7 +1,8 @@
 // E2E UI thật (headless Chrome) qua Nginx :8080: luồng tài xế + hành khách, gồm các kịch bản lỗi của rà soát T27/T28/T29.
-// Không nằm trong dependency của project; cài ở thư mục riêng ngoài repo rồi chạy:
-//   npm i puppeteer-core && npx @puppeteer/browsers install chrome-headless-shell@stable --path ./browsers
-//   NODE_PATH=./node_modules SEED_PASSWORD=<từ .env> node tests/e2e/ui-flow.cjs <đường dẫn chrome> <thư mục ảnh chụp>
+// Chạy từ tests/e2e (CI: .github/workflows/ci.yml):
+//   npm ci
+//   SEED_PASSWORD=<từ .env> node ui-flow.cjs <đường dẫn Chrome/Chromium> <thư mục ảnh chụp>
+// Không có Chrome: npx @puppeteer/browsers install chrome-headless-shell@stable --path ./browsers
 // Yêu cầu: stack Docker Compose đang chạy, đã seed và không có trip dở (scripts/reset-demo.sh --confirm).
 const puppeteer = require('puppeteer-core')
 
@@ -66,7 +67,7 @@ async function newPage(browser) {
 }
 
 async function main() {
-  const browser = await puppeteer.launch({ executablePath: chromePath, headless: 'shell', args: ['--no-sandbox'] })
+  const browser = await puppeteer.launch({ executablePath: chromePath, headless: chromePath.includes('headless-shell') ? 'shell' : true, args: ['--no-sandbox'] })
   try {
     const d1 = await apiLogin('driver-1@demo.local')
     const d2 = await apiLogin('driver-2@demo.local')

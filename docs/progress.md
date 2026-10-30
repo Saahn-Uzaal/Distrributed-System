@@ -949,3 +949,30 @@ Chi tiết: [T27-T32_REVIEW_FIXES](T27-T32_REVIEW_FIXES.md).
 | `bash scripts/security-s01.sh` / `security-s02.sh` | **17/17** / **7/7** |
 | Bản sao sạch (`build --no-cache`, key + `.env` mới, volume riêng) | **PASS** sau khi sửa lỗi `COPY src/web/public/` |
 
+## Lượt 2026-10-30 — T33: Load experiment (k6 P01) — DONE
+
+Chi tiết: [T33](tasks/T33.md). `bash scripts/load-p01.sh` chạy đủ 6 cấu hình trên commit `0c24f96`; raw + `summary.md` tại `tests/performance/results/`.
+
+| Dataset / hành khách | NO_DRIVER | POST 202 p50/p95 (ms) | create→offered p50/p95 (ms) | Lỗi kỹ thuật | Gán trùng |
+|---|---|---|---|---|---|
+| enough 10 / 30 / 50 | 0% | 6/13, 6/18, 5/51 | 2022/8055, 3024/9103, 5536/10651 | 0 | 0 |
+| scarce 10 / 30 / 50 (giữ tài xế 10 s) | 76% / 69,3% / 64% | 7/11, 8/40, 6/66 | 1519/13623, 8570/13624, 10580/15237 | 0 | 0 |
+
+Sửa trong lúc kiểm chứng (lỗi kịch bản đo, không phải sản phẩm): throughput từng tính cả thời gian setup; dataset thiếu tài xế từng không giữ tài xế nên không có contention; k6 ghi nối vào file raw làm lẫn lượt trước.
+
+## Lượt 2026-10-31 — T34: CI và clean deploy — DONE
+
+Chi tiết: [T34](tasks/T34.md). Chưa chạy trên GitHub vì repo chưa có remote.
+
+| Lệnh | Kết quả |
+|---|---|
+| `./mvnw -B clean verify` + `ci-test-report.sh` (Linux) | 375 test, 0 failure/error/skip |
+| `npm ci && npm test && npm run build` (Linux) | 98/98, build pass |
+| `ci-system-check.sh --keep` (Linux, uid 1001) | PASS: healthy 124 s, seed, smoke, S01, S02, route private 404 |
+| `tests/e2e/ui-flow.cjs` (Linux, Chromium) | 13/13 |
+| `clean-deploy-check.sh --confirm` (Windows) | PASS; 2885 chuyến trước = sau |
+| Test khi không có Docker | Error, mvn exit 1, report fail (không skip) |
+| actionlint, `scan-tracked-secrets.sh` | exit 0; secret giả bị phát hiện |
+
+Lỗi sửa khi kiểm chứng: build song song cùng tag fail trên Linux; `mvnw`/script thiếu bit thực thi; máy quét secret luôn PASS do nuốt lỗi `git grep`; bản đầu `clean-deploy-check.sh` khôi phục sai project (volume gốc không mất).
+

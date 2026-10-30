@@ -91,6 +91,20 @@ bash scripts/correlation-filter.sh <correlation-id>   # grep logs 5 services + n
 
 Reset dữ liệu dev: `bash scripts/reset-demo.sh --confirm` (hủy trip chưa terminal của demo users, đưa drivers về AVAILABLE — không chạm volume).
 
+## Kiểm thử và CI
+
+| Lệnh | Mục đích | Yêu cầu |
+|---|---|---|
+| `./mvnw -B clean verify` rồi `bash scripts/ci-test-report.sh` | Backend; báo cáo fail nếu có test bị skip hoặc thiếu report | JDK 21, Docker (Testcontainers). Thiếu Docker thì test **lỗi**, không bị bỏ qua |
+| `cd src/web && npm ci && npm test && npm run build` | Frontend | Node theo `.nvmrc` |
+| `bash scripts/scan-tracked-secrets.sh` | Quét secret trong file được git theo dõi | git |
+| `bash scripts/ci-system-check.sh` | Từ thư mục checkout: tạo `.env` + key nếu thiếu, up, seed, smoke, S01, S02, S03. **Xóa stack + volume khi xong** (`--keep` để giữ) | Docker, curl, openssl; chỉ dùng trong bản checkout dành riêng để kiểm tra |
+| `bash scripts/clean-deploy-check.sh --confirm [--head]` | Như trên nhưng từ bản sao sạch, build không cache; tạm dừng rồi khởi động lại stack đang chạy, giữ volume | Docker |
+| `bash scripts/load-p01.sh` | Đo tải P01, xem `tests/performance/results/summary.md` | Stack đang chạy |
+| `bash scripts/concurrency-c01.sh`, `concurrency-c02.sh`, `recovery-r01.sh`, `recovery-r02.sh` | Test hệ thống dài hơn, chưa đưa vào CI (C01 ~14 phút, R01 ~3 phút) | Stack đang chạy, đã seed |
+
+CI: `.github/workflows/ci.yml` chạy quét secret, backend, frontend, rồi deploy từ checkout sạch + smoke + S01/S02/S03 + E2E trình duyệt.
+
 ## Chạy services local trên host (chế độ dev cũ — tùy chọn)
 
 > Sau T29, cách chính là Docker Compose toàn hệ thống ở mục trên. Chế độ này chỉ còn dùng khi phát triển/debug **một service riêng lẻ** hoặc chạy test; Nginx image proxy sang DNS compose nên full stack qua :8080 yêu cầu backend containerized. Khi chạy Java trên host, chỉ bật hạ tầng (`docker compose --env-file .env -f deploy/compose.yaml up -d postgres rabbitmq topo-declare`) — các port 8081–8085 của backend container sẽ trùng với tiến trình local — và dùng Vite (mục 6) thay cho Nginx.

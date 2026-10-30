@@ -1,0 +1,14 @@
+{"probe":"C1","label":"preflight POST /api/trips","status":"401","access_control_headers":0}
+{"probe":"C2","label":"preflight POST /api/auth/login","status":"200","access_control_headers":0}
+{"probe":"C3","label":"GET /api/trips kèm token","status":"200","access_control_headers":0}
+{"probe":"C4","label":"preflight thẳng driver-service","status":"401","access_control_headers":0}
+{"probe":"C5","label":"same-origin POST login","status":"200"}
+{"probe":"I1","label":"không có token","status":"401"}
+{"probe":"I2","label":"sai token","status":"401"}
+{"probe":"I3","label":"token rỗng","status":"401"}
+{"probe":"I4","label":"JWT người dùng thay cho internal token","status":"401"}
+{"probe":"I5","label":"token đúng","status":"200"}
+{"probe":"I6","label":"POST release không có token","status":"401"}
+{"probe":"I7","label":"qua gateway với token đúng","status":"404"}
+{"probe":"R1","label":"login dồn dập 30 request","status":"429x21,401x9","limited":21,"reached_service":9}
+{"probe":"R2","label":"đăng nhập sau khi hết cửa sổ","status":"200"}

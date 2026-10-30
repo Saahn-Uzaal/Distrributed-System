@@ -66,6 +66,8 @@ services:
 
   # T29 — identity-service (port 8081). Cùng image backend cho cả 5 services; command riêng.
   identity-service:
+    # Chỉ service này build image dùng chung: cả 5 service cùng build một tag sẽ xung đột khi build song song
+    # ("image already exists" trên Docker Linux). 4 service còn lại dùng lại image, không kéo từ registry.
     build:
       context: ..
       dockerfile: deploy/docker/Dockerfile.backend
@@ -109,10 +111,8 @@ services:
 
   # T29 — driver-service (port 8082).
   driver-service:
-    build:
-      context: ..
-      dockerfile: deploy/docker/Dockerfile.backend
     image: ridehailing-backend:0.1.0
+    pull_policy: never
     container_name: ridehailing-driver-service
     restart: unless-stopped
     command: java -jar /app/driver-service.jar
@@ -144,10 +144,8 @@ services:
 
   # T29 — trip-service (port 8083). Gọi driver-service qua DNS compose.
   trip-service:
-    build:
-      context: ..
-      dockerfile: deploy/docker/Dockerfile.backend
     image: ridehailing-backend:0.1.0
+    pull_policy: never
     container_name: ridehailing-trip-service
     restart: unless-stopped
     command: java -jar /app/trip-service.jar
@@ -187,10 +185,8 @@ services:
 
   # T29 — matching-service (port 8084). Gọi driver-service qua DNS compose.
   matching-service:
-    build:
-      context: ..
-      dockerfile: deploy/docker/Dockerfile.backend
     image: ridehailing-backend:0.1.0
+    pull_policy: never
     container_name: ridehailing-matching-service
     restart: unless-stopped
     command: java -jar /app/matching-service.jar
@@ -222,10 +218,8 @@ services:
 
   # T29 — payment-service (port 8085).
   payment-service:
-    build:
-      context: ..
-      dockerfile: deploy/docker/Dockerfile.backend
     image: ridehailing-backend:0.1.0
+    pull_policy: never
     container_name: ridehailing-payment-service
     restart: unless-stopped
     command: java -jar /app/payment-service.jar

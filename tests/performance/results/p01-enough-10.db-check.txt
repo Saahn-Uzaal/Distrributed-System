@@ -1,0 +1,5 @@
+từ thời điểm: 2026-10-30 16:33:45.75851+00
+duplicate_assignments (cặp reservation chồng nhau trên cùng tài xế): 0
+reservation_active_sau_20s: 0
+duplicate_payments (trip+attempt > 1 payment): 0
+trip_nhận_TRIP_ACCEPTED_nhiều_lần: 0

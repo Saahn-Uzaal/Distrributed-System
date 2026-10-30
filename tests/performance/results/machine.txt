@@ -1,0 +1,8 @@
+Máy đo (load generator k6 và toàn bộ stack chạy CHUNG một máy — số đo không tách được tải của k6):
+CPU: AMD Ryzen 9 5900HX with Radeon Graphics (16 logical)
+RAM: 31.9 GiB
+OS: Microsoft Windows 11 Home 10.0.26300
+Docker: server 29.8.1, Docker Desktop (containerized), VM 16 CPU, 16693227520 bytes RAM
+k6: grafana/k6:2.3.0; Nginx: 1 worker, 512 connections; PostgreSQL và RabbitMQ: một instance dùng chung
+Commit: 0c24f96
+Thời điểm: 2026-10-30T16:33:45Z

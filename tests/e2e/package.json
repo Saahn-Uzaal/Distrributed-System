@@ -1,0 +1,8 @@
+{
+  "name": "ridehailing-e2e",
+  "private": true,
+  "description": "E2E UI trên headless Chrome; tách khỏi src/web để không thêm dependency cho frontend.",
+  "dependencies": {
+    "puppeteer-core": "24.43.1"
+  }
+}

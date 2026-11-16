@@ -1,10 +1,10 @@
 S01 — Token sai, thiếu token, gọi API khác role/owner (spec §13)
 BASE_URL=http://localhost:8080
-Setup trip (passenger-1, CANCELLED): 5b4a23df-e7c4-4ff5-afcd-1c6a9f0cdc1d
+Setup trip (passenger-1, CANCELLED): 2d55f425-1c14-4a70-9158-5f42ac003348
 Probes: P1 no token=401; P2 garbage token=401; P3 passenger->driver PUT availability=403;
         P4 passenger->driver GET offer=403; P5 driver->POST trips=403; P6 driver->cancel=403;
         P7 stranger GET trip=404; P8 stranger GET events=404; P9 wrong password login=401;
         P10-P12 token alg=none/chữ ký sai/HS256=401.
-Trip đang offer 319abab4-47dd-49c1-8ea5-fd231da5eea7: P13 passenger lạ cancel=404; P14/P15 driver lạ accept/reject=409 NOT_OFFERED_DRIVER;
+Trip đang offer 9da11682-a195-46bc-b1e2-bec6854305b9: P13 passenger lạ cancel=404; P14/P15 driver lạ accept/reject=409 NOT_OFFERED_DRIVER;
         P16/P17 driver lạ start/complete=409 NOT_ASSIGNED_DRIVER; không lộ state; row trước=sau ('DRIVER_OFFERED|2|68ce4533-c27b-4a38-bfd0-c753f667b99c').
-Data unchanged: trips snapshot before/after identical ('CANCELLED=57;COMPLETED=35;NO_DRIVER=45|dd792ff0d377a1fda5a27478a8f2bcbc'); drivers snapshot identical ('AVAILABLE=1;OFFLINE=2|c3691ab855aa09d5213a529f51f01384').
+Data unchanged: trips snapshot before/after identical ('CANCELLED=64;COMPLETED=2152;NO_DRIVER=679|f41cb10ea1df356a9ba16ea5da3b2a7d'); drivers snapshot identical ('AVAILABLE=51;OFFLINE=2|ec568884869f6ce8f3417255a6daa517').

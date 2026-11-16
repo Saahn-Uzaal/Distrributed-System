@@ -2,4 +2,4 @@ S03 — CORS, internal credential, login rate limit (spec §20.6 dòng T32)
 BASE_URL=http://localhost:8080 DRIVER_URL=http://localhost:8082
 CORS: C1-C4 origin lạ không nhận Access-Control-Allow-*; C5 same-origin POST login=200.
 Internal: I1-I4 không có/sai/rỗng token, JWT người dùng bị từ chối; I5 token đúng=200; I6 lệnh ghi bị từ chối, 0 reservation; I7 qua gateway=404.
-Rate limit: R1 30 login dồn dập -> 429 x21, 401 x9, không status khác; R2 sau khi hết cửa sổ=200.
+Rate limit: R1 30 login dồn dập -> 429 x22, 401 x8, không status khác; R2 sau khi hết cửa sổ=200.

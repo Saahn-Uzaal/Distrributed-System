@@ -1,0 +1,5 @@
+Retry, DLQ, replay, correlation ID trên trip.inbox (scripts/recovery-dlq.sh)
+D1 malformed -> trip.dlq, x-dlq-reason=malformed_envelope, không retry.
+D2 hợp lệ nhưng xử lý lỗi -> 3 lần retry trong log, vào trip.dlq sau ~15 s, mang x-death từ trip.inbox.
+D3 replay-dlq.sh --confirm: message malformed giữ nguyên; message D2 xử lý lại với cùng eventId (log retry 3 -> 6) rồi quay lại DLQ vì trip vẫn không tồn tại.
+D4 correlation-filter.sh: 8 dòng log mang cùng correlationId.

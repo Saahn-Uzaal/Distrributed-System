@@ -510,6 +510,107 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/ApiError"}
 
+  /api/trips/{id}/start:
+    post:
+      tags: [trip]
+      operationId: startTrip
+      summary: Assigned driver bắt đầu chuyến, state phải là ACCEPTED — T22
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: state IN_PROGRESS
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TripCommandResult"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: NOT_ASSIGNED_DRIVER hoặc STATE_CONFLICT
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ApiError"}
+
+  /api/trips/{id}/complete:
+    post:
+      tags: [trip]
+      operationId: completeTrip
+      summary: Assigned driver hoàn thành chuyến, state phải là IN_PROGRESS; phát TripCompleted qua outbox — T22
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: state COMPLETED, paymentStatus PENDING
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tripId: {type: string, format: uuid}
+                  state: {type: string}
+                  paymentStatus: {type: string}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: NOT_ASSIGNED_DRIVER hoặc STATE_CONFLICT
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ApiError"}
+
+  /api/trips/{id}/events:
+    get:
+      tags: [trip]
+      operationId: listTripEvents
+      summary: Lịch sử sự kiện của chuyến, sắp version giảm dần; owner hoặc assigned driver, không quyền → 404 — T25
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: page, in: query, schema: {type: integer, default: 0}}
+        - {name: size, in: query, schema: {type: integer, default: 20}}
+      responses:
+        "200":
+          description: Trang sự kiện
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items: {$ref: "#/components/schemas/TripEvent"}
+                  page: {type: integer}
+                  size: {type: integer}
+                  totalElements: {type: integer, format: int64}
+                  totalPages: {type: integer}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /api/notifications:
+    get:
+      tags: [trip]
+      operationId: listNotifications
+      summary: Thông báo của chính caller, mới nhất trước — T25
+      parameters:
+        - {name: page, in: query, schema: {type: integer, default: 0}}
+        - {name: size, in: query, schema: {type: integer, default: 20}}
+      responses:
+        "200":
+          description: Trang thông báo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  content:
+                    type: array
+                    items: {$ref: "#/components/schemas/Notification"}
+                  page: {type: integer}
+                  size: {type: integer}
+                  totalElements: {type: integer, format: int64}
+                  totalPages: {type: integer}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+
 components:
   securitySchemes:
     bearerAuth:
@@ -772,6 +873,27 @@ components:
         matchingAttempt: {type: integer}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+
+    TripEvent:
+      type: object
+      properties:
+        type: {type: string}
+        version: {type: integer}
+        actorId: {type: string, format: uuid, nullable: true}
+        summary: {type: string}
+        createdAt: {type: string, format: date-time}
+
+    Notification:
+      type: object
+      properties:
+        notificationId: {type: string, format: uuid}
+        tripId: {type: string, format: uuid}
+        type:
+          type: string
+          enum: [TRIP_OFFERED, OFFER_RECEIVED, TRIP_ACCEPTED, TRIP_CANCELLED, NO_DRIVER, TRIP_COMPLETED, PAYMENT_SUCCEEDED, PAYMENT_FAILED]
+        message: {type: string}
+        readAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
 
     TripListEnvelope:
       type: object

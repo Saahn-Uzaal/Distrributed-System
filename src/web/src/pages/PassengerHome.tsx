@@ -65,7 +65,7 @@ export default function PassengerHome(): ReactElement {
   )
 }
 
-/** Tab "Chuyến đi": form đặt chuyến + danh sách (polling 5 s, cleanup khi đổi tab). */
+/** Tab "Chuyến đi": form đặt chuyến + danh sách (polling 2 s, cleanup khi đổi tab). */
 function TripsTab(): ReactElement {
   // Bump sau khi tạo trip thành công → list refresh ngay, không chờ chu kỳ polling.
   const [createdTick, setCreatedTick] = useState(0)

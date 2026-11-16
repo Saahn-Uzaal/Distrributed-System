@@ -2,7 +2,7 @@ C02 — accept và cancel đồng thời (spec §13)
 BASE_URL=http://localhost:8080
 repeats=20
 iterations_ok=20 iterations_fail=0
-accept_wins=14 cancel_wins=6
-overlap_iterations=9 (2 request thật sự chồng nhau trên server)
-duration_s=193
+accept_wins=11 cancel_wins=9
+overlap_iterations=8 (2 request thật sự chồng nhau trên server)
+duration_s=132
 raw: /d/Working/Distributed system/tests/concurrency/c02-results.jsonl

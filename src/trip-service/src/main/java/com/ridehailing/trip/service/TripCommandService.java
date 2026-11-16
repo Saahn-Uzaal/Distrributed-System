@@ -688,6 +688,11 @@ public class TripCommandService {
         }
     }
 
+    /** Việc hồi phục giữ correlation của request tạo chuyến (spec §11). Không tìm thấy thì sinh mới. */
+    public UUID originCorrelationId(UUID tripId) {
+        return outboxRepo.findOriginCorrelationId(tripId).orElseGet(UUID::randomUUID);
+    }
+
     /** Intent bù trừ treo đọc dưới khóa saga; null nếu không còn việc pending. */
     private record PendingCompensation(String intent, String reason, UUID reservationId, UUID driverId,
                                        UUID driverUserId, int attempt, UUID passengerUserId, List<UUID> targets) {
@@ -717,9 +722,9 @@ public class TripCommandService {
             return;
         }
         if ("REJECT".equals(plan.intent()) || "OFFER_EXPIRED".equals(plan.intent())) {
-            // correlationId mới, causation null — timeout nội bộ không có event upstream (events.md §5).
+            // correlation gốc, causation null — timeout nội bộ không có event upstream (events.md §5).
             tx.execute(s -> completeReject(tripId, plan.attempt(), plan.driverUserId(), plan.driverId(),
-                    plan.reservationId(), UUID.randomUUID(), plan.reason()));
+                    plan.reservationId(), originCorrelationId(tripId), plan.reason()));
         } else if ("MATCH_DEADLINE".equals(plan.intent())) {
             tx.executeWithoutResult(s -> completeDeadlineNoDriver(tripId));
         } else {
@@ -788,7 +793,7 @@ public class TripCommandService {
         ReleaseResult r = releaseWithReconcile(info.reservationId(), "OFFER_EXPIRED");
         switch (r.status()) {
             case RELEASED -> tx.execute(s -> completeReject(tripId, info.attempt(), info.driverUserId(),
-                    info.driverId(), info.reservationId(), UUID.randomUUID(), "OFFER_EXPIRED"));
+                    info.driverId(), info.reservationId(), originCorrelationId(tripId), "OFFER_EXPIRED"));
             case REFUSED -> log.info("offer-expired release refused for trip {} (reservation no longer releasable): {}",
                     tripId, r.detail());
             default -> tx.executeWithoutResult(s -> sagaRepo.recordPendingError(tripId,

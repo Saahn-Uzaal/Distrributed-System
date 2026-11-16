@@ -1,8 +1,8 @@
 R02 — Crash Payment sau DB commit nhưng trước ACK, restart (spec §13)
 BASE_URL=http://localhost:8080 failpoint=8000ms (test-only hook app.inbox.failpoint-delay-ms, compose override tạm)
-tripId: 8fd11495-e357-4e5d-9674-050d72f35563
+tripId: 30450b7b-16c4-4a43-bc9d-704745873ca8
 payments rows = 1 (kỳ vọng 1); inbox_events rows = 1; outbox events = 1; trip_event PAYMENT_* = 1; payment_status = SUCCEEDED
 Redelivery pending sau kill: confirmed (payment.inbox depth >= 1 trước restart)
 duplicate event skipped log evidence:
-{"timestamp":"2026-10-30T15:18:16.663121933Z","level":"INFO","service":"payment-service","instanceId":"250b0d96-9b0f-4a2e-9458-b282adce0a0f","correlationId":"8593d820-0981-8660-0443-1465d732921b","eventType":"inbox_duplicate","result":"success","tripId":"8fd11495-e357-4e5d-9674-050d72f35563","logger":"com.ridehailing.payment.inbox.PaymentInboxListener","message":"duplicate event skipped eventId=dbfc6b1d-a9c5-4756-8272-c94a9965bf77 deliveryAttempt=1"}
-Total duration: 46 s
+{"timestamp":"2026-10-31T03:53:03.722127842Z","level":"INFO","service":"payment-service","instanceId":"87b7b9cf-6849-4694-a5b7-b43ba6fe72db","correlationId":"2d46b284-eaf9-2be1-d7d1-79b686fea943","eventType":"inbox_duplicate","result":"success","tripId":"30450b7b-16c4-4a43-bc9d-704745873ca8","logger":"com.ridehailing.payment.inbox.PaymentInboxListener","message":"duplicate event skipped eventId=37f3ea85-986f-4d00-900b-e7682a680aba deliveryAttempt=1"}
+Total duration: 29 s

@@ -3,5 +3,5 @@ BASE_URL=http://localhost:8080
 Phase A: matching stopped -> queue depth=1 giữ TripRequested; start matching trong deadline -> DRIVER_OFFERED; cleanup CANCELLED + driver AVAILABLE.
 Phase B: matching stopped quá deadline 120 s -> NO_DRIVER (kết thúc hợp lệ); start matching với heartbeat tươi -> DriverProposed stale bị skip (audit stale_event_skipped, 0 reservation), trip GIỮ NGUYÊN NO_DRIVER, driver AVAILABLE.
 stale_event_skipped log evidence:
-{"timestamp":"2026-10-30T15:22:30.102040029Z","level":"INFO","service":"trip-service","instanceId":"aa3297a6-9fdb-4faf-b92a-0a9de4210ef1","correlationId":"c994c2e8-510d-af07-7bdd-890ec9c0476e","eventType":"stale_event_skipped","result":"SUCCESS","tripId":"3e6809bd-618e-4282-b370-528ba53afa2c","logger":"com.ridehailing.trip.service.TripInboxHandler","message":"stale event skipped eventType=DriverProposed tripId=3e6809bd-618e-4282-b370-528ba53afa2c attempt=1 currentState=NO_DRIVER currentAttempt=1"}
-Total duration: 192 s
+{"timestamp":"2026-10-31T03:52:17.185649432Z","level":"INFO","service":"trip-service","instanceId":"4c7d1c1c-341a-4a8f-bff0-c233b3bfe76e","correlationId":"35488dff-ada2-0917-0c1b-88d52d0a1743","eventType":"stale_event_skipped","result":"SUCCESS","tripId":"4d8d37eb-7070-44bb-97e9-95326bc5f15b","logger":"com.ridehailing.trip.service.TripInboxHandler","message":"stale event skipped eventType=DriverProposed tripId=4d8d37eb-7070-44bb-97e9-95326bc5f15b attempt=1 currentState=NO_DRIVER currentAttempt=1"}
+Total duration: 166 s

@@ -52,6 +52,8 @@ final class StatefulDriverStub {
     private final Map<String, Processed> processed = new HashMap<>();
     /** "PUT:<rid>", "GET:<rid>", "POST:<rid>/confirm", "POST:<rid>/release", "POST:<rid>/finish" theo thứ tự nhận. */
     final List<String> calls = Collections.synchronizedList(new ArrayList<>());
+    /** "METHOD:path" → X-Correlation-ID của lần gọi gần nhất. */
+    final Map<String, String> correlationIds = Collections.synchronizedMap(new HashMap<>());
     /** Body lệnh confirm/release đã nhận (kể cả replay). */
     final List<Map<String, Object>> commandBodies = Collections.synchronizedList(new ArrayList<>());
 
@@ -87,6 +89,7 @@ final class StatefulDriverStub {
         reservations.clear();
         processed.clear();
         calls.clear();
+        correlationIds.clear();
         commandBodies.clear();
         delayAfterApplyMs.clear();
         delayBeforeApplyCount.clear();
@@ -119,6 +122,7 @@ final class StatefulDriverStub {
             String action = path.contains("/") ? path.substring(path.indexOf('/') + 1)
                     : ("PUT".equals(method) ? "reserve" : "get");
             calls.add(method + ":" + path);
+            correlationIds.put(method + ":" + path, ex.getRequestHeaders().getFirst("X-Correlation-ID"));
 
             if ("get".equals(action)) {
                 if (getFailureStatus != 0) {

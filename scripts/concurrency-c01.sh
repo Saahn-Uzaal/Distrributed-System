@@ -149,7 +149,7 @@ D1_TOK="$(login "$D1")";    sleep 0.2
 D2_TOK="$(login "$D2")";    sleep 0.2
 D3_TOK="$(login "$D3")"
 
-RESULTS_DIR="$REPO_ROOT/tests/concurrency"
+RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/tests/concurrency}"
 mkdir -p "$RESULTS_DIR"
 RESULTS_FILE="$RESULTS_DIR/c01-results.jsonl"
 SNAPSHOTS_FILE="$RESULTS_DIR/c01-snapshots.jsonl"
@@ -284,7 +284,7 @@ SUMMARY="$RESULTS_DIR/c01-summary.txt"
 } > "$SUMMARY"
 
 echo "== C01 done: ok=$total_ok fail=$total_fail offers_seen=$offers_seen_iterations/$C01_REPEATS wins A/B=$a_wins/$b_wins (~${DURATION}s)"
-{ [ "$a_wins" -gt 0 ] && [ "$b_wins" -gt 0 ]; } || echo "WARNING: chỉ một trip từng thắng offer — lượt này chỉ kiểm chứng một thứ tự đến."
+{ [ "$C01_REPEATS" -lt 2 ] || { [ "$a_wins" -gt 0 ] && [ "$b_wins" -gt 0 ]; }; } || echo "WARNING: chỉ một trip từng thắng offer — lượt này chỉ kiểm chứng một thứ tự đến."
 
 # Zero-offer trong TẤT CẢ lượt = test không exercise contention -> FAIL.
 if [ "$offers_seen_iterations" -eq 0 ]; then

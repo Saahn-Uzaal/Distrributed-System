@@ -183,7 +183,7 @@ D1_TOK="$(login "$D1")";    sleep 0.2
 D2_TOK="$(login "$D2")";    sleep 0.2
 D3_TOK="$(login "$D3")"
 
-RESULTS_DIR="$REPO_ROOT/tests/recovery"
+RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/tests/recovery}"
 mkdir -p "$RESULTS_DIR"
 RESULTS_FILE="$RESULTS_DIR/r01-results.jsonl"
 SUMMARY_FILE="$RESULTS_DIR/r01-summary.txt"
@@ -253,6 +253,12 @@ drvA="$(driver_status_db "$D1_ID")" || fail "psql driver status lỗi"
 [ "$drvA" = "AVAILABLE" ] || fail "driver-1 không về AVAILABLE sau cleanup Phase A (status: $drvA)"
 
 echo "{\"phase\":\"A\",\"tripId\":\"$tripA\",\"queue_depth_while_stopped\":$A_DEPTH,\"final_state\":\"$stA\",\"cleanup_state\":\"$finalA\",\"duration_s\":$((SECONDS - A_T0))}" >> "$RESULTS_FILE"
+
+# R01_PHASES=A: chỉ chạy Phase A (demo trực tiếp, ~20 s; Phase B phải chờ hết deadline 120 s).
+if [ "${R01_PHASES:-AB}" = "A" ]; then
+  echo "== R01 Phase A PASS — trip $tripA: queue giữ $A_DEPTH message khi Matching dừng, xử lý tiếp sau khi bật lại"
+  exit 0
+fi
 
 # ================= PHASE B: deadline hết -> NO_DRIVER hợp lệ; stale event bị skip =================
 echo "== Phase B: stop matching -> wait past 120 s deadline -> NO_DRIVER -> start matching -> stale skip"

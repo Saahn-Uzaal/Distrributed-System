@@ -1,6 +1,6 @@
 /**
  * T27 — danh sách chuyến của hành khách (GET /api/trips, phân trang §1.3).
- * Polling 5 s; dừng khi tab unmount (cleanup) hoặc sau thao tác → refresh().
+ * Polling 2 s; dừng khi tab unmount (cleanup) hoặc sau thao tác → refresh().
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -15,7 +15,7 @@ import { usePolling } from '../../hooks/usePolling'
 import { useUnauthorizedRedirect } from '../../hooks/useUnauthorizedRedirect'
 import StaleDataAlert from '../../ui/StaleDataAlert'
 
-const LIST_POLL_MS = 5000
+const LIST_POLL_MS = 2000 // spec §3
 const PAGE_SIZE = 20
 
 interface Props {

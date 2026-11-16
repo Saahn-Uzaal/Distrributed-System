@@ -84,6 +84,15 @@ export interface Notification {
   createdAt: string
 }
 
+/** Một dòng lịch sử chuyến (GET /api/trips/{id}/events, contract §3.3). */
+export interface TripEvent {
+  type: string
+  version: number
+  actorId: string | null
+  summary: string
+  createdAt: string
+}
+
 /** Terminal states của trip; COMPLETED vẫn có thể đang chờ payment — xem isTripSettled. */
 export const TERMINAL_TRIP_STATES: readonly TripState[] = ['COMPLETED', 'CANCELLED', 'NO_DRIVER']
 

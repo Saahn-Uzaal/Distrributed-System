@@ -3,5 +3,5 @@ BASE_URL=http://localhost:8080
 Probes: Q1 quote lat=999=400; C1 create thiếu destination=400; C2 create lat=-95=400;
         B1 body ~200KiB=413 PAYLOAD_TOO_LARGE; T1 start on DRIVER_OFFERED=409 STATE_CONFLICT;
         T2 accept wrong driver=409 NOT_OFFERED_DRIVER; T3 cancel on COMPLETED=409 STATE_CONFLICT.
-Trip hợp lệ: b8cfd107-6c40-48df-b2e8-8c576d517a7f -> COMPLETED; positive accept=202, start/complete=200.
-No bad data: bad_rows after=0 (kỳ vọng 0); total trips +1 only (138 -> 139); completed +1 (35 -> 36).
+Trip hợp lệ: 460f0329-ccf5-4af8-be0c-fa548430bbe0 -> COMPLETED; positive accept=202, start/complete=200.
+No bad data: bad_rows after=0 (kỳ vọng 0); total trips +1 only (2896 -> 2897); completed +1 (2152 -> 2153).

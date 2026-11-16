@@ -3,7 +3,7 @@
 Prototype hệ thống đặt xe mô phỏng Grab/Uber cho môn Distributed Systems.
 5 business microservices chạy độc lập, giao tiếp qua REST + RabbitMQ (message queue), mỗi service có database riêng trên PostgreSQL; triển khai bằng Docker Compose.
 
-> **Trạng thái hiện tại (22/10/2026): T01–T12 DONE + toàn bộ FIX_LIST T01–T12 đã khắc phục** (82 mục, xem [docs/FIX_LIST_T01-T12.md](docs/FIX_LIST_T01-T12.md)). Backend `clean verify` BUILD SUCCESS — **220 tests, 0 failures/errors/skipped** (Identity 36, Driver 105, Trip 59, Matching 10, Payment 10). Frontend test **43/43**, build thành công. T11 có confirm/release/finish, tombstone, fencing và expiry RESERVED; test restart ứng dụng giữ CONFIRMED/BUSY và hồi phục RESERVED quá hạn. Chi tiết: [T11](docs/tasks/T11.md), [sửa review](docs/T09-T12_REVIEW_FIXES.md). T13/T14 còn TODO; chưa có luồng matching/saga đầu cuối.
+> **Trạng thái (31/10/2026):** T01–T36 đã thực hiện. Backend 377 test, frontend 100 test, E2E 13 kiểm tra, không lỗi.
 
 ## Stack
 
@@ -12,16 +12,15 @@ Prototype hệ thống đặt xe mô phỏng Grab/Uber cho môn Distributed Syst
 | Backend | Java 21, Spring Boot 4.1.1, Maven Wrapper |
 | API | Spring Web MVC (starter `spring-boot-starter-webmvc`) + validation |
 | Persistence | PostgreSQL + Flyway; **JdbcTemplate** ở driver/trip/matching/payment, chỉ identity-service dùng JPA — xem mục "Lệch đặc tả có chủ đích" |
-| Security | Spring Security mới dùng phần crypto (BCrypt) + JWT filter tự viết (nimbus-jose-jwt); chưa dùng authorization model đầy đủ của Spring Security |
-| Messaging | RabbitMQ + Spring AMQP. **trip-service** đã publish qua outbox (T13: persistent, `mandatory`, publisher confirms). Consumer (inbox, retry, DLQ) thuộc T14; matching/payment chưa có AMQP |
+| Security | Spring Security (filter chain theo role), BCrypt, JWT RS256 (nimbus-jose-jwt), `X-Internal-Token` cho API nội bộ |
+| Messaging | RabbitMQ + Spring AMQP. Trip, Matching, Payment: outbox (persistent, `mandatory`, publisher confirms) + inbox (dedup, retry 3 lần, DLQ) |
 | Frontend | React + TypeScript + Vite + Ant Design (từ task T08) |
 | Deploy | Docker Compose + Nginx (từ task T29) |
 
 ### Lệch đặc tả có chủ đích
 
 - **JdbcTemplate thay JPA** (driver/trip/matching/payment): các thao tác quan trọng cần SQL tường minh và kiểm chứng được — CAS fencing trên `drivers.status` + `current_reservation_id`/`current_trip_id`, claim idempotency bằng `INSERT ... ON CONFLICT DO NOTHING` trong transaction, advisory lock theo passenger (`pg_advisory_xact_lock`), isolation `REPEATABLE READ` cho list. JPA sẽ che các bước này và khó audit hơn. identity-service dùng JPA vì chỉ là CRUD user đơn giản.
-- **RabbitMQ mới có phía publish**: trip-service có `spring-boot-starter-amqp` và outbox worker (T13); chưa service nào consume — inbox/retry/DLQ thuộc T14, matching consume ở T15.
-- **Spring Security crypto-only**: verify JWT tự viết (RS256 + allowlist alg + iss/aud) và BCrypt cho password — đủ cho MVP, không cần security model đầy đủ.
+- **Một image backend chung cho 5 container** thay vì Dockerfile từng module: nhanh hơn, vẫn là 5 tiến trình độc lập. Test tích hợp nằm trong từng module thay vì `tests/integration/`.
 
 ## Modules & ports nội bộ
 
@@ -60,7 +59,7 @@ Nếu broker đã chạy sẵn và volume bị reset khi container còn sống, 
 
 - Topology: topic exchange durable `ride.events` + DLX `ride.events.dlx`; inbox queues `matching.inbox ← trip.requested`, `trip.inbox ← matching.#` **và** `payment.#` (F02 — PaymentSucceeded/PaymentFailed về Trip), `payment.inbox ← trip.completed`; mỗi queue dead-letter sang `ride.events.dlx` về DLQ riêng (`matching.dlq`, `trip.dlq`, `payment.dlq`).
 - Declare qua AMQP (escript dùng `amqp_client` có sẵn trong image rabbitmq, chạy one-off container trên network `ridehailing_net`) — không phụ thuộc HTTP API.
-- Management UI: http://localhost:15672 (credentials dev trong `.env`). Message persistent + durable topology đã probe qua restart broker (chi tiết: `docs/tasks/T04.md`).
+- Management UI: http://localhost:15672 (credentials dev trong `.env`). Message persistent + durable topology đã được kiểm tra qua thao tác restart broker.
 
 ## Chạy toàn hệ thống bằng Docker Compose (T29) — cách chính
 
@@ -101,7 +100,9 @@ Reset dữ liệu dev: `bash scripts/reset-demo.sh --confirm` (hủy trip chưa 
 | `bash scripts/ci-system-check.sh` | Từ thư mục checkout: tạo `.env` + key nếu thiếu, up, seed, smoke, S01, S02, S03. **Xóa stack + volume khi xong** (`--keep` để giữ) | Docker, curl, openssl; chỉ dùng trong bản checkout dành riêng để kiểm tra |
 | `bash scripts/clean-deploy-check.sh --confirm [--head]` | Như trên nhưng từ bản sao sạch, build không cache; tạm dừng rồi khởi động lại stack đang chạy, giữ volume | Docker |
 | `bash scripts/load-p01.sh` | Đo tải P01, xem `tests/performance/results/summary.md` | Stack đang chạy |
-| `bash scripts/concurrency-c01.sh`, `concurrency-c02.sh`, `recovery-r01.sh`, `recovery-r02.sh` | Test hệ thống dài hơn, chưa đưa vào CI (C01 ~14 phút, R01 ~3 phút) | Stack đang chạy, đã seed |
+| `bash scripts/concurrency-c01.sh`, `concurrency-c02.sh`, `recovery-r01.sh`, `recovery-r02.sh`, `recovery-dlq.sh` | Test hệ thống dài hơn, chưa đưa vào CI (C01 ~11–14 phút, R01 ~3 phút) | Stack đang chạy, đã seed |
+| `bash scripts/replay-dlq.sh [--queue trip.dlq] [--confirm]` | Xem DLQ; `--confirm` để replay, giữ nguyên `eventId` | Stack đang chạy |
+| `bash scripts/demo-concurrency.sh`, `demo-recovery.sh matching\|payment` | Kịch bản ngắn cho demo; không đè kết quả trong `tests/` | Stack đang chạy, đã seed |
 
 CI: `.github/workflows/ci.yml` chạy quét secret, backend, frontend, rồi deploy từ checkout sạch + smoke + S01/S02/S03 + E2E trình duyệt.
 
@@ -212,15 +213,23 @@ bash scripts/reset-demo.sh --confirm  # hủy trip chưa terminal của demo use
 
 Theo đề §10.1 và đặc tả mục 16 (C02):
 - `src/` — 5 backend modules (`identity-service`, `driver-service`, `trip-service`, `matching-service`, `payment-service`) + frontend `web/`.
-- `tests/` — test hệ thống cấp project sẽ đặt ở đây; unit/integration test hiện nằm trong từng module (xem `tests/README.md`).
+- `tests/` — E2E, kịch bản k6 và raw results của test đồng thời, phục hồi, bảo mật, hiệu năng; unit/integration test nằm trong từng module.
 - `deploy/` — `compose.yaml`, `nginx.conf`, `postgres/init/` (init 5 DB/user), `rabbitmq/` (declare topology) — đúng cấu trúc spec §16.
-- `scripts/`, `docs/`; `keys/` và `.env` gitignored.
+- `scripts/`; `docs/openapi.yaml` chứa đặc tả OpenAPI; `keys/` và `.env` được Git bỏ qua.
 
-## Tài liệu dự án
+## Kịch bản demo
 
-- `docs/backlog.md` — 36 task T01–T36, trạng thái và dependency
-- `docs/progress.md` — tiến độ từng lượt, lệnh đã chạy, kết quả thật
-- `docs/handoff.md` — trạng thái cho lượt tiếp theo
-- `docs/tasks/Txx.md` — nhật ký chi tiết mỗi task
-- `docs/openapi.yaml` — OpenAPI các endpoint đã triển khai (T06/T09/T11/T12)
-- `docs/FIX_LIST_T01-T12.md` — danh sách 82 mục rà soát T01–T12, trạng thái và bằng chứng kiểm chứng
+Kịch bản demo gồm 8 bước:
+
+1. Năm service độc lập, queue trên RabbitMQ.
+2. Tài xế bật trạng thái sẵn sàng.
+3. Hai hành khách đặt xe đồng thời khi chỉ có một tài xế (`bash scripts/demo-concurrency.sh`).
+4. Chuyến hoàn chỉnh trên giao diện: đặt, nhận, bắt đầu, hoàn thành, thanh toán, thông báo.
+5. Dừng Matching, queue giữ message, bật lại và chuyến tiếp tục (`bash scripts/demo-recovery.sh matching`).
+6. Payment chết sau commit, trước ACK; redelivery không tạo payment trùng (`bash scripts/demo-recovery.sh payment`).
+7. Tài xế từ chối, Saga giải phóng reservation.
+8. Theo dấu một luồng qua các service bằng correlationId (`bash scripts/correlation-filter.sh <id>`).
+
+## Đặc tả API
+
+`docs/openapi.yaml` mô tả các endpoint public và internal.

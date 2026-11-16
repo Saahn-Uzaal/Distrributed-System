@@ -139,6 +139,7 @@ class MatchingJobIntegrationTest {
         final AtomicInteger timeoutCallsRemaining = new AtomicInteger(0);
         /** Query string (raw) của lần gọi gần nhất — kiểm chứng excludeDriverIds được gửi (M1). */
         volatile String lastQuery;
+        volatile String lastCorrelationId;
 
         DriverStub() {
             try {
@@ -148,6 +149,7 @@ class MatchingJobIntegrationTest {
                 this.server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
                 this.server.createContext("/internal/drivers/candidates", exchange -> {
                     lastQuery = exchange.getRequestURI().getRawQuery();
+                    lastCorrelationId = exchange.getRequestHeaders().getFirst("X-Correlation-ID");
                     if (delayMs > 0 && timeoutCallsRemaining.decrementAndGet() >= 0) {
                         try {
                             Thread.sleep(delayMs);
@@ -177,6 +179,7 @@ class MatchingJobIntegrationTest {
             delayMs = 0;
             timeoutCallsRemaining.set(0);
             lastQuery = null;
+            lastCorrelationId = null;
         }
     }
 
@@ -427,6 +430,9 @@ class MatchingJobIntegrationTest {
 
         publishTripRequested(eventId, correlationId, tripId, 1, List.of());
         waitForInboxRow(eventId);
+
+        // Contract §5: correlation của event được truyền sang HTTP gọi Driver.
+        assertThat(DRIVER_STUB.lastCorrelationId).isEqualTo(correlationId.toString());
 
         // Job PROPOSED + candidates JSONB đúng thứ tự A→B.
         assertThat(jobState(tripId, 1)).isEqualTo("PROPOSED");

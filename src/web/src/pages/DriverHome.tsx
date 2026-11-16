@@ -1,7 +1,7 @@
 /**
  * T28 — màn hình tài xế: hồ sơ, online/location/heartbeat, offer accept/reject, start/complete.
  *
- * SERVER là nguồn sự thật: mọi state hiển thị đọc từ GET /api/drivers/me (poll 3 s, không có side effect).
+ * SERVER là nguồn sự thật: mọi state hiển thị đọc từ GET /api/drivers/me (poll 2 s, không có side effect).
  * Mở trang hay tải lại KHÔNG đổi trạng thái tài xế; client không cache state.
  * Heartbeat + polling đều có cleanup khi unmount / đổi trạng thái.
  */
@@ -24,7 +24,7 @@ import BusyTripPanel from './driver/BusyTripPanel'
 import OfferPanel from './driver/OfferPanel'
 
 const HEARTBEAT_INTERVAL_MS = 10_000 // matching cần last_seen_at < 15 s (default)
-const STATE_POLL_MS = 3_000
+const STATE_POLL_MS = 2_000 // spec §3
 
 function apiErrorText(e: unknown): string {
   return e instanceof ApiError ? `${e.code}: ${e.message}` : 'Lỗi không xác định.'

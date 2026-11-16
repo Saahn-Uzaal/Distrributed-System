@@ -10,5 +10,5 @@
 {"probe":"I5","label":"token đúng","status":"200"}
 {"probe":"I6","label":"POST release không có token","status":"401"}
 {"probe":"I7","label":"qua gateway với token đúng","status":"404"}
-{"probe":"R1","label":"login dồn dập 30 request","status":"429x21,401x9","limited":21,"reached_service":9}
+{"probe":"R1","label":"login dồn dập 30 request","status":"429x22,401x8","limited":22,"reached_service":8}
 {"probe":"R2","label":"đăng nhập sau khi hết cửa sổ","status":"200"}

@@ -29,6 +29,13 @@ public class OutboxRepository {
         this.jdbc = jdbc;
     }
 
+    /** Correlation của request tạo chuyến: TripRequested đầu tiên của trip (events.md §5). */
+    public Optional<UUID> findOriginCorrelationId(UUID tripId) {
+        return jdbc.query("SELECT correlation_id FROM outbox WHERE aggregate_id = ?"
+                        + " AND event_type = 'TripRequested' ORDER BY occurred_at, id LIMIT 1",
+                (rs, n) -> rs.getObject(1, UUID.class), tripId).stream().findFirst();
+    }
+
     /** Ghi row PENDING (root event — không có causation). payloadJson phải là JSON hợp lệ
      *  — bind explicit {@code ?::jsonb} (pgjdbc bind String thành varchar, không suy ra jsonb).
      *  T12-2 (N33): ghi thêm aggregate_version (chụp trips.version lúc ghi) + routing_key

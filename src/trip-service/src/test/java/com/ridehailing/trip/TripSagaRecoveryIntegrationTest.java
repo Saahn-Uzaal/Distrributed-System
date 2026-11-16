@@ -183,6 +183,37 @@ class TripSagaRecoveryIntegrationTest extends TripCommandTestSupport {
         assertThat(requests.get(1).get("excludedDriverIds")).isEqualTo(List.of(o.driverId().toString()));
     }
 
+    /** Spec §11: worker gọi Driver và phát lại TripRequested bằng correlation của request tạo chuyến. */
+    @Test
+    void offerExpiryKeepsOriginCorrelationOnDriverCallAndEvent() throws Exception {
+        Offered o = offeredTrip();
+        backdateOfferExpiresAt(o.tripId());
+        DRIVER.expire(o.reservationId().toString());
+        UUID origin = jdbc.queryForObject("SELECT correlation_id FROM outbox WHERE aggregate_id = ?"
+                + " AND event_type = 'TripRequested'", UUID.class, o.tripId());
+
+        worker.processDueSagas();
+
+        assertThat(DRIVER.correlationIds.get("POST:" + o.reservationId() + "/release"))
+                .isEqualTo(origin.toString());
+        assertThat(jdbc.queryForList("SELECT correlation_id FROM outbox WHERE aggregate_id = ?"
+                + " AND event_type = 'TripRequested'", UUID.class, o.tripId()))
+                .hasSize(2).containsOnly(origin);
+    }
+
+    /** Contract §5: request reject truyền X-Correlation-ID của nó sang lệnh release ở Driver. */
+    @Test
+    void rejectForwardsRequestCorrelationToDriver() throws Exception {
+        Offered o = offeredTrip();
+        String correlationId = UUID.randomUUID().toString();
+
+        Resp r = post("/api/trips/" + o.tripId() + "/reject", token(o.driverUserId(), "DRIVER"),
+                "{\"attempt\":" + o.attempt() + "}", Map.of("X-Correlation-ID", correlationId));
+
+        assertThat(r.status()).isEqualTo(202);
+        assertThat(DRIVER.correlationIds.get("POST:" + o.reservationId() + "/release")).isEqualTo(correlationId);
+    }
+
     /** Offer hết hạn ở mọi lượt (3 driver khác nhau, không ai phản hồi) → NO_DRIVER terminal, saga ABORTED. */
     @Test
     void offerExpiryOnEveryAttemptEndsWithNoDriver() throws Exception {

@@ -1,6 +1,6 @@
 /**
  * T28 — panel chuyến đang phục vụ của tài xế (GET /api/trips/{id}).
- * Polling 3 s; dừng khi trip kết thúc hoặc NOT_FOUND, cleanup khi unmount.
+ * Polling 2 s; dừng khi trip kết thúc hoặc NOT_FOUND, cleanup khi unmount.
  * Start chỉ từ ACCEPTED, complete chỉ từ IN_PROGRESS ("disable thao tác sai trạng thái").
  * Panel tự biến mất khi GET /api/drivers/me báo tài xế không còn BUSY (finish xong, T22).
  */
@@ -14,7 +14,7 @@ import { usePolling } from '../../hooks/usePolling'
 import { useUnauthorizedRedirect } from '../../hooks/useUnauthorizedRedirect'
 import StaleDataAlert from '../../ui/StaleDataAlert'
 
-const TRIP_POLL_MS = 3000
+const TRIP_POLL_MS = 2000 // spec §3
 
 interface Props {
   tripId: string

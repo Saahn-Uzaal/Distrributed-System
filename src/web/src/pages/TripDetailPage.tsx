@@ -1,6 +1,6 @@
 /**
  * T27 — chi tiết chuyến (GET /api/trips/{id}).
- * Polling 3 s; DỪNG khi trip kết thúc VÀ payment đã có kết quả, hoặc lỗi NOT_FOUND/UNAUTHORIZED,
+ * Polling 2 s; DỪNG khi trip kết thúc VÀ payment đã có kết quả, hoặc lỗi NOT_FOUND/UNAUTHORIZED,
  * và luôn cleanup khi unmount (acceptance "polling cleanup").
  */
 import type { ReactElement } from 'react'
@@ -13,7 +13,7 @@ import { usePolling } from '../hooks/usePolling'
 import { useUnauthorizedRedirect } from '../hooks/useUnauthorizedRedirect'
 import StaleDataAlert from '../ui/StaleDataAlert'
 
-const DETAIL_POLL_MS = 3000
+const DETAIL_POLL_MS = 2000 // spec §3
 
 export default function TripDetailPage(): ReactElement {
   const navigate = useNavigate()

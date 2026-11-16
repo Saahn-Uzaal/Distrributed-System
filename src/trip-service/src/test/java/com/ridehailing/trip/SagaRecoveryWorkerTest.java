@@ -30,6 +30,8 @@ class SagaRecoveryWorkerTest {
         when(repo.applyLease(eq(healthy.tripId()), eq(0), eq("WAITING_DRIVER"), anyString(), eq(5000L)))
                 .thenReturn(true);
 
+        when(commands.originCorrelationId(healthy.tripId())).thenReturn(UUID.randomUUID());
+
         var worker = new SagaRecoveryWorker(commands, repo, manager, "test", 5000, 5);
         assertThatCode(worker::processDueSagas).doesNotThrowAnyException();
         verify(commands).handleOfferExpired(healthy.tripId());

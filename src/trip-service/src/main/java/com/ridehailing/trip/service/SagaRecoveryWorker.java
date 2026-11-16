@@ -3,6 +3,7 @@ package com.ridehailing.trip.service;
 import com.ridehailing.trip.repo.SagaRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -76,11 +77,14 @@ public class SagaRecoveryWorker {
                 if (!claim(row)) {
                     continue; // row đã đổi phase/version từ lúc quét — bên khác đang xử lý
                 }
+                MDC.put("correlationId", commandService.originCorrelationId(row.tripId()).toString());
                 executePhase(row.tripId(), row.phase());
                 tx.executeWithoutResult(s -> sagaRepo.releaseLease(row.tripId(), leaseOwner));
             } catch (RuntimeException e) {
                 // Giữ lease: sau khi hết hạn, saga được claim lại và intent replay idempotent.
                 log.error("saga recovery failed trip={} phase={}: {}", row.tripId(), row.phase(), e.toString());
+            } finally {
+                MDC.remove("correlationId");
             }
         }
     }

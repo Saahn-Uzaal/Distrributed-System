@@ -203,7 +203,7 @@ D1_TOK="$(login "$D1")";    sleep 0.2
 D2_TOK="$(login "$D2")";    sleep 0.2
 D3_TOK="$(login "$D3")"
 
-RESULTS_DIR="$REPO_ROOT/tests/recovery"
+RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/tests/recovery}"
 mkdir -p "$RESULTS_DIR"
 RESULTS_FILE="$RESULTS_DIR/r02-results.jsonl"
 SUMMARY_FILE="$RESULTS_DIR/r02-summary.txt"

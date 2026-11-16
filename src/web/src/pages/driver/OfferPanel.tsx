@@ -1,6 +1,6 @@
 /**
  * T28 — offer hiện tại của tài xế (GET /api/drivers/me/offer). Chỉ mount khi server báo RESERVED;
- * polling 3 s, cleanup khi unmount.
+ * polling 2 s, cleanup khi unmount.
  *
  * Accept chưa rõ kết quả (202 DRIVER_OFFERED, timeout, 5xx) không bị coi là thất bại: GET /api/drivers/me
  * ở trang cha sẽ chuyển sang BUSY khi Driver đã confirm; còn offer thì tài xế bấm lại được (idempotent).
@@ -18,7 +18,7 @@ import { formatDateTime, formatVnd } from '../../trips/types'
 import StaleDataAlert from '../../ui/StaleDataAlert'
 import { isAmbiguousOutcome } from '../../ui/errorHint'
 
-const OFFER_POLL_MS = 3_000
+const OFFER_POLL_MS = 2_000 // spec §3
 
 interface Props {
   /** Thao tác xong → trang cha đọc lại state server ngay, không chờ chu kỳ poll. */

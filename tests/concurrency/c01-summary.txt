@@ -3,6 +3,6 @@ BASE_URL=http://localhost:8080
 repeats=20 (yêu cầu >= 20)
 iterations_ok=20 iterations_fail=0
 iterations_with_offer_seen=20
-offer_won_by: tripA=17 tripB=3
-duration_s=849
+offer_won_by: tripA=18 tripB=2
+duration_s=657
 raw: /d/Working/Distributed system/tests/concurrency/c01-results.jsonl ; snapshots: /d/Working/Distributed system/tests/concurrency/c01-snapshots.jsonl

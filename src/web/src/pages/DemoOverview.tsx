@@ -2,6 +2,7 @@
  * T29 — màn hình demo overview (spec §14):
  * - "Chuyến theo quyền đã cho phép" qua API hiện có GET /api/trips
  *   (passenger thấy chuyến của mình; driver thấy chuyến được offer/assign) — không endpoint mới.
+ * - Lịch sử sự kiện của chuyến đang chọn (GET /api/trips/{id}/events) — chỉ loại, version, tóm tắt, thời gian.
  * - Links health nội bộ DEV-ONLY: publish CHỈ 127.0.0.1:808x trong compose, KHÔNG expose qua :8080.
  * - Correlation filter: lệnh scripts/correlation-filter.sh <cid> để grep logs 5 services + nginx.
  */
@@ -12,12 +13,12 @@ import { Alert, Button, Card, Input, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { loadSession } from '../auth/session'
 import { tripsApi } from '../api/trips'
-import type { Trip } from '../trips/types'
+import type { Trip, TripEvent } from '../trips/types'
 import { formatDateTime, formatVnd, tripStateColor, tripStateLabel } from '../trips/types'
 import { usePolling } from '../hooks/usePolling'
 import { useUnauthorizedRedirect } from '../hooks/useUnauthorizedRedirect'
 
-const LIST_POLL_MS = 5000
+const LIST_POLL_MS = 2000 // spec §3
 
 /** Health endpoints nội bộ — dev-only (publish CHỈ 127.0.0.1 trong compose). */
 export const HEALTH_LINKS: { name: string; url: string }[] = [
@@ -33,6 +34,36 @@ export function correlationFilterCommand(cid: string): string {
   return `bash scripts/correlation-filter.sh ${cid.trim()}`
 }
 
+/** Lịch sử sự kiện một chuyến; `key` theo tripId ở nơi dùng để đổi chuyến là khởi tạo lại polling. */
+function TripEventsCard({ tripId }: { tripId: string }): ReactElement {
+  const { data, error } = usePolling((signal) => tripsApi.listTripEvents(tripId, 0, 50, signal), { intervalMs: LIST_POLL_MS })
+  useUnauthorizedRedirect(error)
+
+  const columns: ColumnsType<TripEvent> = [
+    { title: 'Version', key: 'version', render: (_v, e) => e.version },
+    { title: 'Sự kiện', key: 'type', render: (_v, e) => <Tag>{e.type}</Tag> },
+    { title: 'Tóm tắt', key: 'summary', render: (_v, e) => e.summary },
+    { title: 'Lúc', key: 'createdAt', render: (_v, e) => formatDateTime(e.createdAt) }
+  ]
+
+  return (
+    <Card title={`Lịch sử sự kiện — chuyến ${tripId}`} size="small">
+      {error && !data ? (
+        <Alert type="warning" message={`Không tải được lịch sử: ${error.code}`} />
+      ) : (
+        <Table
+          rowKey={(e) => `${e.version}-${e.type}-${e.createdAt}`}
+          columns={columns}
+          dataSource={data?.content ?? []}
+          loading={!data}
+          pagination={false}
+          size="small"
+        />
+      )}
+    </Card>
+  )
+}
+
 export default function DemoOverview(): ReactElement {
   const navigate = useNavigate()
   const session = loadSession()
@@ -42,6 +73,7 @@ export default function DemoOverview(): ReactElement {
   const { data, error } = usePolling((signal) => tripsApi.listTrips(0, 20, signal), { intervalMs: LIST_POLL_MS })
   useUnauthorizedRedirect(error)
   const [cidInput, setCidInput] = useState('')
+  const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
 
   const trips = data?.content ?? []
 
@@ -66,7 +98,16 @@ export default function DemoOverview(): ReactElement {
       key: 'paymentStatus',
       render: (_v, t) => (t.paymentStatus === 'NOT_REQUESTED' ? <Typography.Text type="secondary">—</Typography.Text> : t.paymentStatus)
     },
-    { title: 'Tạo lúc', key: 'createdAt', render: (_v, t) => formatDateTime(t.createdAt) }
+    { title: 'Tạo lúc', key: 'createdAt', render: (_v, t) => formatDateTime(t.createdAt) },
+    {
+      title: 'Sự kiện',
+      key: 'events',
+      render: (_v, t) => (
+        <Button size="small" onClick={() => setSelectedTripId(t.tripId)}>
+          Xem lịch sử
+        </Button>
+      )
+    }
   ]
 
   return (
@@ -99,6 +140,8 @@ export default function DemoOverview(): ReactElement {
             <Table rowKey="tripId" columns={columns} dataSource={trips} pagination={false} size="small" />
           )}
         </Card>
+
+        {selectedTripId && <TripEventsCard key={selectedTripId} tripId={selectedTripId} />}
 
         <Card title="Health nội bộ — dev-only" size="small">
           <Alert

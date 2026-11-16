@@ -1,2 +1,2 @@
-{"phase":"A","tripId":"40bf45b9-3010-4fd7-9655-9dab167cf1d1","queue_depth_while_stopped":1,"final_state":"DRIVER_OFFERED","cleanup_state":"CANCELLED","duration_s":20}
-{"phase":"B","tripId":"3e6809bd-618e-4282-b370-528ba53afa2c","no_driver_after_deadline":true,"stale_event_type":"DriverProposed","reservations_created":0,"final_state":"NO_DRIVER","driver_status":"AVAILABLE","duration_s":143}
+{"phase":"A","tripId":"6941e8b9-7efd-4116-bc87-af19922f1040","queue_depth_while_stopped":1,"final_state":"DRIVER_OFFERED","cleanup_state":"CANCELLED","duration_s":14}
+{"phase":"B","tripId":"4d8d37eb-7070-44bb-97e9-95326bc5f15b","no_driver_after_deadline":true,"stale_event_type":"DriverProposed","reservations_created":0,"final_state":"NO_DRIVER","driver_status":"AVAILABLE","duration_s":134}

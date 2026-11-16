@@ -11,6 +11,7 @@ import type {
   Page,
   QuoteResult,
   Trip,
+  TripEvent,
   TripState
 } from '../trips/types'
 
@@ -39,6 +40,11 @@ export const tripsApi = {
 
   getTrip(tripId: string, signal?: AbortSignal): Promise<Trip> {
     return http(`/api/trips/${tripId}`, { signal })
+  },
+
+  /** GET /api/trips/{id}/events (owner hoặc driver được gán; không thì 404), mới nhất trước. */
+  listTripEvents(tripId: string, page = 0, size = 50, signal?: AbortSignal): Promise<Page<TripEvent>> {
+    return http(`/api/trips/${tripId}/events?page=${page}&size=${size}`, { signal })
   },
 
   /** POST /api/trips/{id}/cancel (chỉ owner passenger) — 200 CANCELLED hoặc 202 CANCELLING. */

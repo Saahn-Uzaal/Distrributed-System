@@ -39,17 +39,15 @@ Passenger nhập địa chỉ đón/đến rồi bấm **Tìm** hoặc Enter; h�
 
 Passenger và driver đều xem được tên hai địa chỉ cùng tuyến đường trước và trong chuyến. Các endpoint chính là `GET /api/locations/search`, `POST /api/trips/quote`, rồi `POST /api/trips`; chi tiết schema nằm trong `docs/openapi.yaml`. Dịch vụ public miễn phí phù hợp local/demo và có thể bị giới hạn lưu lượng, vì vậy tìm địa chỉ có rate limit + cache và không phù hợp tải production lớn.
 
-## Phân chia dự án cho 3 thành viên (theo yêu cầu gốc)
-
-Phạm vi dưới đây giữ nguyên cách gán **Owner A/B/C** trong backlog DS03 ban đầu. Khi áp dụng cho nhóm thật, chỉ cần thay A/B/C bằng tên thành viên; không đổi ranh giới module và trách nhiệm. Mỗi người chịu trách nhiệm chính cho code, migration, test và tài liệu của phần mình.
+## Phân chia dự án cho 3 thành viên
 
 | Phần | Thành viên phụ trách | Task gốc | Module/phạm vi sở hữu | Kết quả chính |
 |---|---|---|---|---|
-| **1. Trip, Saga và Payment** | **Thành viên A** | T12–T13, T16, T18–T25 | `trip-service`, `payment-service` | Tạo và điều phối chuyến, outbox, Saga, vòng đời chuyến, thanh toán, notification và lịch sử sự kiện |
-| **2. Driver và Matching** | **Thành viên B** | T09–T11, T14–T15, T17 | `driver-service`, `matching-service` | Hồ sơ/vị trí tài xế, giữ chỗ nguyên tử, offer, matching, inbox retry và DLQ |
-| **3. Nền tảng, Identity, Web và Deploy** | **Thành viên C** | T01–T08, T26–T29, T32–T34 | `identity-service`, `src/web`, `deploy/`, `infra/`, `.github/`, các script hệ thống | Kiến trúc nền, xác thực, frontend, Docker/Nginx, seed/smoke, security test, load test và CI |
+| **1. Trip, Saga và Payment** | **Đặng Xuân Anh** | T12–T13, T16, T18–T25 | `trip-service`, `payment-service` | Tạo và điều phối chuyến, outbox, Saga, vòng đời chuyến, thanh toán, notification và lịch sử sự kiện |
+| **2. Driver và Matching** | **Nguyễn Văn Hiếu** | T09–T11, T14–T15, T17 | `driver-service`, `matching-service` | Hồ sơ/vị trí tài xế, giữ chỗ nguyên tử, offer, matching, inbox retry và DLQ |
+| **3. Nền tảng, Identity, Web và Deploy** | **Nguyễn Minh Hùng** | T01–T08, T26–T29, T32–T34 | `identity-service`, `src/web`, `deploy/`, `infra/`, `.github/`, các script hệ thống | Kiến trúc nền, xác thực, frontend, Docker/Nginx, seed/smoke, security test, load test và CI |
 
-### Phần 1 — Thành viên A: Trip, Saga và Payment
+### Phần 1 — Đặng Xuân Anh: Trip, Saga và Payment
 
 - Xây dựng API báo giá/tạo chuyến, idempotency, phân quyền owner/driver và state machine của trip.
 - Phát/nhận event bằng transactional outbox/inbox; điều phối Saga khi offer, accept, reject, cancel, timeout hoặc restart.
@@ -57,7 +55,7 @@ Phạm vi dưới đây giữ nguyên cách gán **Owner A/B/C** trong backlog D
 - Với phần bản đồ mở rộng: phụ trách backend Nominatim/OSRM, location token, `quoteToken`, tính giá theo tuyến đường và lưu snapshot địa chỉ/GeoJSON vào trip.
 - Chịu trách nhiệm chính cho migration và test của `trip-service`/`payment-service`.
 
-### Phần 2 — Thành viên B: Driver và Matching
+### Phần 2 — Nguyễn Văn Hiếu: Driver và Matching
 
 - Xây dựng hồ sơ, xe, vị trí, heartbeat và trạng thái `OFFLINE/AVAILABLE/RESERVED/BUSY` của tài xế.
 - Thực hiện reserve nguyên tử, confirm/release/finish, fencing version và tự giải phóng reservation hết hạn.
@@ -65,7 +63,7 @@ Phạm vi dưới đây giữ nguyên cách gán **Owner A/B/C** trong backlog D
 - Bảo đảm driver được reserve/offer đúng một lần và tương thích với dữ liệu pickup/destination do Trip phát ra.
 - Chịu trách nhiệm chính cho migration và test của `driver-service`/`matching-service`.
 
-### Phần 3 — Thành viên C: Nền tảng, Identity, Web và Deploy
+### Phần 3 — Nguyễn Minh Hùng: Nền tảng, Identity, Web và Deploy
 
 - Chốt API/event contract; dựng Maven multi-module, PostgreSQL tách DB/user, RabbitMQ topology, security và structured logging.
 - Xây dựng đăng ký/đăng nhập, JWT, giao diện passenger/driver/demo và cơ chế polling/recovery trên frontend.

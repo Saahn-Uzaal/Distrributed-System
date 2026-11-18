@@ -39,6 +39,51 @@ Passenger nhập địa chỉ đón/đến rồi bấm **Tìm** hoặc Enter; h�
 
 Passenger và driver đều xem được tên hai địa chỉ cùng tuyến đường trước và trong chuyến. Các endpoint chính là `GET /api/locations/search`, `POST /api/trips/quote`, rồi `POST /api/trips`; chi tiết schema nằm trong `docs/openapi.yaml`. Dịch vụ public miễn phí phù hợp local/demo và có thể bị giới hạn lưu lượng, vì vậy tìm địa chỉ có rate limit + cache và không phù hợp tải production lớn.
 
+## Phân chia dự án cho 3 thành viên (theo yêu cầu gốc)
+
+Phạm vi dưới đây giữ nguyên cách gán **Owner A/B/C** trong backlog DS03 ban đầu. Khi áp dụng cho nhóm thật, chỉ cần thay A/B/C bằng tên thành viên; không đổi ranh giới module và trách nhiệm. Mỗi người chịu trách nhiệm chính cho code, migration, test và tài liệu của phần mình.
+
+| Phần | Thành viên phụ trách | Task gốc | Module/phạm vi sở hữu | Kết quả chính |
+|---|---|---|---|---|
+| **1. Trip, Saga và Payment** | **Thành viên A** | T12–T13, T16, T18–T25 | `trip-service`, `payment-service` | Tạo và điều phối chuyến, outbox, Saga, vòng đời chuyến, thanh toán, notification và lịch sử sự kiện |
+| **2. Driver và Matching** | **Thành viên B** | T09–T11, T14–T15, T17 | `driver-service`, `matching-service` | Hồ sơ/vị trí tài xế, giữ chỗ nguyên tử, offer, matching, inbox retry và DLQ |
+| **3. Nền tảng, Identity, Web và Deploy** | **Thành viên C** | T01–T08, T26–T29, T32–T34 | `identity-service`, `src/web`, `deploy/`, `infra/`, `.github/`, các script hệ thống | Kiến trúc nền, xác thực, frontend, Docker/Nginx, seed/smoke, security test, load test và CI |
+
+### Phần 1 — Thành viên A: Trip, Saga và Payment
+
+- Xây dựng API báo giá/tạo chuyến, idempotency, phân quyền owner/driver và state machine của trip.
+- Phát/nhận event bằng transactional outbox/inbox; điều phối Saga khi offer, accept, reject, cancel, timeout hoặc restart.
+- Xử lý start/complete, payment success/failure, notification và lịch sử sự kiện.
+- Với phần bản đồ mở rộng: phụ trách backend Nominatim/OSRM, location token, `quoteToken`, tính giá theo tuyến đường và lưu snapshot địa chỉ/GeoJSON vào trip.
+- Chịu trách nhiệm chính cho migration và test của `trip-service`/`payment-service`.
+
+### Phần 2 — Thành viên B: Driver và Matching
+
+- Xây dựng hồ sơ, xe, vị trí, heartbeat và trạng thái `OFFLINE/AVAILABLE/RESERVED/BUSY` của tài xế.
+- Thực hiện reserve nguyên tử, confirm/release/finish, fencing version và tự giải phóng reservation hết hạn.
+- Xây dựng matching job, xếp hạng ứng viên, loại tài xế đã từ chối, proposal và cơ chế inbox retry/DLQ.
+- Bảo đảm driver được reserve/offer đúng một lần và tương thích với dữ liệu pickup/destination do Trip phát ra.
+- Chịu trách nhiệm chính cho migration và test của `driver-service`/`matching-service`.
+
+### Phần 3 — Thành viên C: Nền tảng, Identity, Web và Deploy
+
+- Chốt API/event contract; dựng Maven multi-module, PostgreSQL tách DB/user, RabbitMQ topology, security và structured logging.
+- Xây dựng đăng ký/đăng nhập, JWT, giao diện passenger/driver/demo và cơ chế polling/recovery trên frontend.
+- Với phần bản đồ mở rộng: phụ trách form tìm địa chỉ, Leaflet/OpenStreetMap, hiển thị tuyến cho passenger/driver, proxy Nginx và smoke test luồng địa chỉ.
+- Đóng gói Docker Compose, seed/reset/smoke, kiểm thử security/load/E2E, CI và hướng dẫn chạy/demo.
+- Chịu trách nhiệm chính cho `identity-service`, `src/web`, hạ tầng, triển khai và tài liệu tổng hợp.
+
+### Phần phối hợp bắt buộc
+
+| Công việc chung | Người tham gia | Quy ước bàn giao |
+|---|---|---|
+| T21 — Timeout/restart Saga | A + B | A sở hữu Saga; B bảo đảm reservation/matching có thể replay và bù trừ an toàn |
+| T30 — Test concurrency, T31 — failure/recovery | A + B | Cung cấp kịch bản và bằng chứng cho cả hai phía Trip ↔ Driver/Matching |
+| T32 — Security, T34 — CI/clean deploy | C chính, A + B hỗ trợ | C chạy bộ kiểm tra tổng; A/B sửa lỗi trong module mình sở hữu |
+| T35 — Report/demo guide, T36 — rà soát cuối | A + B + C | Mỗi người viết và trình bày phần mình; C ghép tài liệu/chạy demo tổng |
+
+Ranh giới tích hợp được giữ bằng REST API và RabbitMQ contract: A không đọc trực tiếp Driver DB, B không đọc trực tiếp Trip DB, C không đưa nghiệp vụ backend vào frontend. Mọi thay đổi liên phần phải cập nhật `docs/openapi.yaml`, event payload liên quan và có integration test trước khi bàn giao.
+
 ## Local infrastructure — PostgreSQL (T03)
 
 Yêu cầu: Docker Desktop đang chạy.

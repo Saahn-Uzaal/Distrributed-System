@@ -10,6 +10,7 @@ import com.ridehailing.trip.repo.OutboxRepository;
 import com.ridehailing.trip.repo.SagaRepository;
 import com.ridehailing.trip.repo.TripEventRepository;
 import com.ridehailing.trip.repo.TripRepository;
+import com.ridehailing.trip.repo.TripQuoteRepository;
 import com.ridehailing.trip.security.AuthenticatedUser;
 import com.ridehailing.trip.security.CorrelationIdFilter;
 import com.ridehailing.trip.security.Role;
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import com.ridehailing.trip.logging.AuditLog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
@@ -62,13 +64,16 @@ public class TripService {
     private final SagaRepository sagaRepo;
     private final TripEventRepository eventRepo;
     private final IdempotencyKeyRepository idempotencyRepo;
+    private final TripQuoteRepository quoteRepo;
     private final ObjectMapper json;
     private final long fareBaseVnd;
     private final long farePerKmVnd;
     private final long tripMatchDeadlineSeconds;
 
+    @Autowired
     public TripService(TripRepository tripRepo, OutboxRepository outboxRepo, SagaRepository sagaRepo,
                        TripEventRepository eventRepo, IdempotencyKeyRepository idempotencyRepo, ObjectMapper json,
+                       TripQuoteRepository quoteRepo,
                        @Value("${fare.base-vnd:12000}") long fareBaseVnd,
                        @Value("${fare.per-km-vnd:5000}") long farePerKmVnd,
                        @Value("${app.trip.trip-match-deadline-seconds:120}") long tripMatchDeadlineSeconds) {
@@ -77,10 +82,19 @@ public class TripService {
         this.sagaRepo = sagaRepo;
         this.eventRepo = eventRepo;
         this.idempotencyRepo = idempotencyRepo;
+        this.quoteRepo = quoteRepo;
         this.json = json;
         this.fareBaseVnd = fareBaseVnd;
         this.farePerKmVnd = farePerKmVnd;
         this.tripMatchDeadlineSeconds = Math.max(1, tripMatchDeadlineSeconds);
+    }
+
+    /** Compatibility constructor for the legacy-migration replay test. */
+    public TripService(TripRepository tripRepo, OutboxRepository outboxRepo, SagaRepository sagaRepo,
+                       TripEventRepository eventRepo, IdempotencyKeyRepository idempotencyRepo, ObjectMapper json,
+                       long fareBaseVnd, long farePerKmVnd, long tripMatchDeadlineSeconds) {
+        this(tripRepo, outboxRepo, sagaRepo, eventRepo, idempotencyRepo, json, null,
+                fareBaseVnd, farePerKmVnd, tripMatchDeadlineSeconds);
     }
 
     /** POST /api/trips/quote — không tạo trip, không side effect (contract §3.3). */
@@ -95,17 +109,54 @@ public class TripService {
     @Transactional
     public CreateOutcome create(AuthenticatedUser user, String idempotencyKeyHeader, QuoteRequest req,
                                 UUID correlationId) {
+        validate(req);
+        long distanceM = Haversine.meters(req.pickup().latitude(), req.pickup().longitude(),
+                req.destination().latitude(), req.destination().longitude());
+        long fareVnd = ((Number) fare(distanceM).get("fareVnd")).longValue();
+        ResolvedTrip resolved = new ResolvedTrip(req.pickup().latitude(), req.pickup().longitude(),
+                req.destination().latitude(), req.destination().longitude(),
+                req.pickup().latitude() + ", " + req.pickup().longitude(),
+                req.destination().latitude() + ", " + req.destination().longitude(),
+                distanceM, 0, "{\"type\":\"LineString\",\"coordinates\":[]}", fareVnd, null);
+        return createResolved(user, idempotencyKeyHeader, requestHash(req), resolved, correlationId);
+    }
+
+    @Transactional
+    public CreateOutcome createFromQuote(AuthenticatedUser user, String idempotencyKeyHeader, UUID quoteToken,
+                                         UUID correlationId) {
+        if (quoteToken == null) throw new InvalidInputException("quoteToken is required.");
+        validateIdempotencyKey(idempotencyKeyHeader);
+        UUID key = UUID.fromString(idempotencyKeyHeader.trim());
+        String hash = requestHash(quoteToken);
+        var existing = idempotencyRepo.findByKey(user.userId(), CREATE_TRIP_OPERATION, key);
+        if (existing.isPresent()) return replayOrMismatch(existing.get(), hash, key);
+        if (quoteRepo == null) throw new InvalidInputException("Route quotes are unavailable.");
+        var quote = quoteRepo.findValidForUpdate(quoteToken, user.userId(), Instant.now())
+                .orElseGet(() -> {
+                    var raced = idempotencyRepo.findByKey(user.userId(), CREATE_TRIP_OPERATION, key);
+                    if (raced.isPresent()) return null;
+                    throw new InvalidInputException("Quote is invalid or expired; calculate the route again.");
+                });
+        if (quote == null) return replayOrMismatch(idempotencyRepo.findByKey(user.userId(), CREATE_TRIP_OPERATION, key)
+                .orElseThrow(), hash, key);
+        ResolvedTrip resolved = new ResolvedTrip(quote.pickup().latitude(), quote.pickup().longitude(),
+                quote.destination().latitude(), quote.destination().longitude(), quote.pickup().displayName(),
+                quote.destination().displayName(), quote.distanceM(), quote.durationS(), quote.routeGeometry(),
+                quote.fareVnd(), quoteToken);
+        return createResolved(user, idempotencyKeyHeader, hash, resolved, correlationId);
+    }
+
+    private record ResolvedTrip(double pickupLat, double pickupLng, double destinationLat, double destinationLng,
+                                String pickupAddress, String destinationAddress, long distanceM, long durationS,
+                                String routeGeometry, long fareVnd, UUID quoteToken) {}
+
+    private CreateOutcome createResolved(AuthenticatedUser user, String idempotencyKeyHeader, String hash,
+                                         ResolvedTrip resolved, UUID correlationId) {
+        validateIdempotencyKey(idempotencyKeyHeader);
         if (!CorrelationIdFilter.isValidUuid(idempotencyKeyHeader)) {
             throw new InvalidInputException("Idempotency-Key header is required and must be a valid UUID.");
         }
-        validate(req);
         UUID key = UUID.fromString(idempotencyKeyHeader.trim());
-
-        long distanceM = Haversine.meters(req.pickup().latitude(), req.pickup().longitude(),
-                req.destination().latitude(), req.destination().longitude());
-        Map<String, Object> fareFields = fare(distanceM);
-
-        String hash = requestHash(req);
         // T12-1 (F14): MỘT timestamp duy nhất, truncate về giây để round-trip qua DB
         // (TIMESTAMPTZ microsecond) giữ nguyên chuỗi ISO — response, GET, replay và
         // outbox.occurred_at đều dùng đúng giá trị này.
@@ -147,16 +198,25 @@ public class TripService {
 
         // T12-1 (F14): MỘT timestamp duy nhất — ghi tường minh vào trips.created_at và dùng
         // cho response + replay stored + outbox.occurred_at.
-        tripRepo.insert(tripId, user.userId(), req.pickup().latitude(), req.pickup().longitude(),
-                req.destination().latitude(), req.destination().longitude(), distanceM,
-                ((Number) fareFields.get("fareVnd")).longValue(), createdAt);
+        tripRepo.insert(tripId, user.userId(), resolved.pickupLat(), resolved.pickupLng(),
+                resolved.destinationLat(), resolved.destinationLng(), resolved.pickupAddress(),
+                resolved.destinationAddress(), resolved.distanceM(), resolved.durationS(),
+                resolved.routeGeometry(), resolved.fareVnd(), createdAt);
+        if (resolved.quoteToken() != null && quoteRepo.markUsed(resolved.quoteToken(), tripId, createdAt) != 1) {
+            throw new InvalidInputException("Quote was already used; calculate the route again.");
+        }
 
         // Ý định yêu cầu matching: outbox PENDING TripRequested attempt 1 (events.md §3.1).
         // T12-2 (N33): aggregate_version = trips.version lúc ghi (= 1), routing_key = trip.requested.
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tripId", tripId.toString());
         payload.put("attempt", 1);
-        payload.put("pickup", pointJson(req.pickup()));
+        payload.put("pickup", pointJson(resolved.pickupLat(), resolved.pickupLng(), resolved.pickupAddress()));
+        payload.put("destination", pointJson(resolved.destinationLat(), resolved.destinationLng(), resolved.destinationAddress()));
+        payload.put("distanceM", resolved.distanceM());
+        payload.put("routeDurationS", resolved.durationS());
+        payload.put("routeGeometry", readJson(resolved.routeGeometry()));
+        payload.put("fareVnd", resolved.fareVnd());
         payload.put("excludedDriverIds", List.of());
         outboxRepo.insertPending(UUID.randomUUID(), "TripRequested", tripId, writeJson(payload), correlationId,
                 createdAt, 1, "trip.requested");
@@ -174,6 +234,17 @@ public class TripService {
                 "trip created state=SEARCHING matchingAttempt=1 passengerUserId={}", user.userId());
 
         return new CreateOutcome(202, body);
+    }
+
+    private void validateIdempotencyKey(String header) {
+        if (!CorrelationIdFilter.isValidUuid(header))
+            throw new InvalidInputException("Idempotency-Key header is required and must be a valid UUID.");
+    }
+
+    private CreateOutcome replayOrMismatch(IdempotencyKeyRepository.Stored stored, String hash, UUID key) {
+        if (stored.requestHash().equals(hash)) return parseStoredResponse(stored);
+        throw new IdempotencyMismatchException("Idempotency-Key was already used with a different payload.",
+                Map.of("idempotencyKey", key.toString()));
     }
 
     /** GET /api/trips — phân trang §1.3; passenger thấy chuyến của mình, driver thấy chuyến đã assign.
@@ -297,6 +368,19 @@ public class TripService {
         }
     }
 
+    static String requestHash(UUID quoteToken) {
+        String canonical = "quoteToken=" + quoteToken;
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(canonical.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable.", e);
+        }
+    }
+
     /** Canonical double cho hash (T10-5/T12-4): -0.0 -> 0.0; các giá trị khác giữ Double.toString. */
     static String canonicalDouble(double value) {
         return value == 0.0 ? "0.0" : Double.toString(value);
@@ -318,9 +402,11 @@ public class TripService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("tripId", row.id().toString());
         m.put("state", row.state());
-        m.put("pickup", pointJson(row.pickupLat(), row.pickupLng()));
-        m.put("destination", pointJson(row.destinationLat(), row.destinationLng()));
+        m.put("pickup", pointJson(row.pickupLat(), row.pickupLng(), row.pickupAddress()));
+        m.put("destination", pointJson(row.destinationLat(), row.destinationLng(), row.destinationAddress()));
         m.put("distanceM", row.distanceM());
+        m.put("routeDurationS", row.routeDurationS());
+        m.put("routeGeometry", readJson(row.routeGeometry()));
         m.put("fareVnd", row.fareVnd());
         m.put("paymentStatus", row.paymentStatus());
         m.put("createdAt", row.createdAt().truncatedTo(ChronoUnit.SECONDS));
@@ -331,9 +417,11 @@ public class TripService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("tripId", row.id().toString());
         m.put("state", row.state());
-        m.put("pickup", pointJson(row.pickupLat(), row.pickupLng()));
-        m.put("destination", pointJson(row.destinationLat(), row.destinationLng()));
+        m.put("pickup", pointJson(row.pickupLat(), row.pickupLng(), row.pickupAddress()));
+        m.put("destination", pointJson(row.destinationLat(), row.destinationLng(), row.destinationAddress()));
         m.put("distanceM", row.distanceM());
+        m.put("routeDurationS", row.routeDurationS());
+        m.put("routeGeometry", readJson(row.routeGeometry()));
         m.put("fareVnd", row.fareVnd());
         m.put("paymentStatus", row.paymentStatus());
         m.put("driverId", row.driverId() == null ? null : row.driverId().toString());
@@ -350,6 +438,12 @@ public class TripService {
         return p;
     }
 
+    private Map<String, Object> pointJson(double lat, double lng, String address) {
+        Map<String, Object> p = pointJson(lat, lng);
+        p.put("address", address);
+        return p;
+    }
+
     private Map<String, Object> pointJson(QuoteRequest.Point p) {
         return pointJson(p.latitude(), p.longitude());
     }
@@ -360,5 +454,10 @@ public class TripService {
         } catch (Exception e) {
             throw new IllegalStateException("Cannot serialize JSON.", e);
         }
+    }
+
+    private Object readJson(String value) {
+        try { return json.readTree(value); }
+        catch (Exception e) { throw new IllegalStateException("Stored route geometry is malformed.", e); }
     }
 }

@@ -5,8 +5,11 @@ import com.ridehailing.trip.security.AuthenticatedUser;
 import com.ridehailing.trip.security.CorrelationIdFilter;
 import com.ridehailing.trip.service.TripCommandService;
 import com.ridehailing.trip.service.TripService;
+import com.ridehailing.trip.map.RouteQuoteService;
 import com.ridehailing.trip.web.dto.AttemptRequest;
 import com.ridehailing.trip.web.dto.QuoteRequest;
+import com.ridehailing.trip.web.dto.RouteQuoteRequest;
+import com.ridehailing.trip.web.dto.CreateTripRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,10 +35,13 @@ public class TripController {
 
     private final TripService tripService;
     private final TripCommandService commandService;
+    private final RouteQuoteService routeQuoteService;
 
-    public TripController(TripService tripService, TripCommandService commandService) {
+    public TripController(TripService tripService, TripCommandService commandService,
+                          RouteQuoteService routeQuoteService) {
         this.tripService = tripService;
         this.commandService = commandService;
+        this.routeQuoteService = routeQuoteService;
     }
 
     /** T18 — POST /api/trips/{id}/accept (chỉ offered driver; role DRIVER enforce ở SecurityConfig). */
@@ -89,8 +95,12 @@ public class TripController {
 
     /** POST /api/trips/quote — 200 {distanceM, fareVnd}; không tạo trip. */
     @PostMapping("/quote")
-    public ResponseEntity<Map<String, Object>> quote(@RequestBody QuoteRequest req) {
-        return ResponseEntity.ok(tripService.quote(req));
+    public ResponseEntity<RouteQuoteService.QuoteResult> quote(
+            @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
+            @RequestBody RouteQuoteRequest req) {
+        return ResponseEntity.ok(routeQuoteService.quote(user.userId(),
+                req == null ? null : req.pickupLocationToken(),
+                req == null ? null : req.destinationLocationToken()));
     }
 
     /** POST /api/trips — 202 + Location; Idempotency-Key bắt buộc (400 nếu thiếu/sai UUID). */
@@ -99,8 +109,14 @@ public class TripController {
             @RequestAttribute(JwtAuthenticationFilter.PRINCIPAL_ATTRIBUTE) AuthenticatedUser user,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestAttribute(CorrelationIdFilter.ATTRIBUTE) String correlationId,
-            @RequestBody QuoteRequest req) {
-        TripService.CreateOutcome outcome = tripService.create(user, idempotencyKey, req, UUID.fromString(correlationId));
+            @RequestBody CreateTripRequest req) {
+        TripService.CreateOutcome outcome;
+        if (req != null && req.quoteToken() != null) {
+            outcome = tripService.createFromQuote(user, idempotencyKey, req.quoteToken(), UUID.fromString(correlationId));
+        } else {
+            outcome = tripService.create(user, idempotencyKey,
+                    req == null ? null : new QuoteRequest(req.pickup(), req.destination()), UUID.fromString(correlationId));
+        }
         return ResponseEntity.status(outcome.httpStatus())
                 .header("Location", "/api/trips/" + outcome.body().get("tripId"))
                 .body(outcome.body());

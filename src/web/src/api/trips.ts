@@ -5,7 +5,6 @@
 import { http } from './client'
 import type {
   CancelResult,
-  Coord,
   CreateTripResult,
   Notification,
   Page,
@@ -14,21 +13,27 @@ import type {
   TripEvent,
   TripState
 } from '../trips/types'
+import type { LocationSelection } from '../trips/types'
 
 export const tripsApi = {
   /** POST /api/trips/quote — không tạo trip, không side effect. */
-  quote(pickup: Coord, destination: Coord, signal?: AbortSignal): Promise<QuoteResult> {
-    return http('/api/trips/quote', { method: 'POST', body: { pickup, destination }, signal })
+  searchLocations(query: string, signal?: AbortSignal): Promise<LocationSelection[]> {
+    return http<{ results: LocationSelection[] }>(`/api/locations/search?q=${encodeURIComponent(query)}`, { signal })
+      .then((response) => response.results)
+  },
+
+  quote(pickupLocationToken: string, destinationLocationToken: string, signal?: AbortSignal): Promise<QuoteResult> {
+    return http('/api/trips/quote', { method: 'POST', body: { pickupLocationToken, destinationLocationToken }, signal })
   },
 
   /**
    * POST /api/trips — bắt buộc header Idempotency-Key (UUID).
    * Cùng key + cùng payload → replay response gốc (202, không tạo trip mới) — contract §3.3.
    */
-  createTrip(key: string, pickup: Coord, destination: Coord, signal?: AbortSignal): Promise<CreateTripResult> {
+  createTrip(key: string, quoteToken: string, signal?: AbortSignal): Promise<CreateTripResult> {
     return http('/api/trips', {
       method: 'POST',
-      body: { pickup, destination },
+      body: { quoteToken },
       extraHeaders: { 'Idempotency-Key': key },
       signal
     })

@@ -20,6 +20,8 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import com.ridehailing.trip.map.MapUpstreamException;
+import com.ridehailing.trip.map.RouteNotFoundException;
 
 /**
  * T07 — lỗi JSON thống nhất cho trip-service (contract §1.1): không bao giờ lộ stack trace,
@@ -130,6 +132,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(TripNotFoundException.class)
     public ResponseEntity<ApiError> tripNotFound(TripNotFoundException e, HttpServletRequest req) {
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", e.getMessage(), null, req);
+    }
+
+    @ExceptionHandler(RouteNotFoundException.class)
+    public ResponseEntity<ApiError> routeNotFound(RouteNotFoundException e, HttpServletRequest req) {
+        return build(HttpStatus.UNPROCESSABLE_ENTITY, "ROUTE_NOT_FOUND", e.getMessage(), null, req);
+    }
+
+    @ExceptionHandler(MapUpstreamException.class)
+    public ResponseEntity<ApiError> mapUnavailable(MapUpstreamException e, HttpServletRequest req) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "MAP_SERVICE_UNAVAILABLE",
+                "Dịch vụ bản đồ tạm thời không khả dụng. Vui lòng thử lại.", null, req);
     }
 
     @ExceptionHandler(Exception.class)

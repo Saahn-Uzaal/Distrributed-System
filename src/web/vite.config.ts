@@ -12,6 +12,7 @@ export default defineConfig({
       '/api/auth': 'http://localhost:8081',
       '/api/drivers': 'http://localhost:8082',
       '/api/trips': 'http://localhost:8083',
+      '/api/locations': 'http://localhost:8083',
       '/api/notifications': 'http://localhost:8083'
     }
   },

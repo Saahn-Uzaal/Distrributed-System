@@ -343,7 +343,27 @@ paths:
                 $ref: "#/components/schemas/ReservationCommandResponse"
         "409": {description: Conflict — code STATE_CONFLICT / STALE_VERSION}
 
-  # ---------------- trip-service (T12) ----------------
+  # ---------------- trip-service (T12 + address routing) ----------------
+  /api/locations/search:
+    get:
+      tags: [trip]
+      operationId: searchLocations
+      summary: Tìm địa chỉ tại Việt Nam theo thao tác bấm Tìm/Enter (role PASSENGER)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 3, maxLength: 200}
+      responses:
+        "200":
+          description: Tối đa 5 kết quả; locationToken thuộc passenger và có thời hạn
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocationSearchResponse"
+        "400": {$ref: "#/components/responses/InvalidInput"}
+        "503": {description: Dịch vụ bản đồ tạm thời không khả dụng; client phải yêu cầu người dùng thử lại}
+
   /api/trips/quote:
     post:
       tags: [trip]
@@ -354,18 +374,17 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/QuoteRequest"
+              $ref: "#/components/schemas/RouteQuoteRequest"
       responses:
         "200":
-          description: Giá tính phía server
+          description: Tuyến đường OSRM và giá tính phía server; quoteToken có thời hạn
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  distanceM: {type: integer}
-                  fareVnd: {type: integer, format: int64}
+                $ref: "#/components/schemas/RouteQuoteResponse"
         "400": {$ref: "#/components/responses/InvalidInput"}
+        "422": {description: Không tìm thấy tuyến đường lái xe}
+        "503": {description: Dịch vụ định tuyến tạm thời không khả dụng; không tạo báo giá thay thế}
 
   /api/trips:
     post:
@@ -382,7 +401,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/QuoteRequest"
+              $ref: "#/components/schemas/CreateTripRequest"
       responses:
         "202":
           description: Trip đã tạo (replay key cũ trả response gốc)
@@ -679,6 +698,14 @@ components:
         latitude: {type: number}
         longitude: {type: number}
 
+    AddressedGeoPoint:
+      allOf:
+        - $ref: "#/components/schemas/GeoPoint"
+        - type: object
+          required: [address]
+          properties:
+            address: {type: string}
+
     RegisterRequest:
       type: object
       required: [email, password, fullName, role]
@@ -845,11 +872,70 @@ components:
         version: {type: integer}
 
     QuoteRequest:
+      deprecated: true
       type: object
       required: [pickup, destination]
       properties:
         pickup: {$ref: "#/components/schemas/GeoPoint"}
         destination: {$ref: "#/components/schemas/GeoPoint"}
+
+    LocationSearchResult:
+      type: object
+      required: [locationToken, displayName, latitude, longitude]
+      properties:
+        locationToken: {type: string, format: uuid}
+        displayName: {type: string}
+        latitude: {type: number}
+        longitude: {type: number}
+
+    LocationSearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          maxItems: 5
+          items: {$ref: "#/components/schemas/LocationSearchResult"}
+
+    RouteQuoteRequest:
+      type: object
+      required: [pickupLocationToken, destinationLocationToken]
+      properties:
+        pickupLocationToken: {type: string, format: uuid}
+        destinationLocationToken: {type: string, format: uuid}
+
+    GeoJsonLineString:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type: {type: string, enum: [LineString]}
+        coordinates:
+          type: array
+          minItems: 2
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: {type: number}
+
+    RouteQuoteResponse:
+      type: object
+      required: [quoteToken, pickup, destination, distanceM, durationS, fareVnd, routeGeometry, expiresAt]
+      properties:
+        quoteToken: {type: string, format: uuid}
+        pickup: {$ref: "#/components/schemas/LocationSearchResult"}
+        destination: {$ref: "#/components/schemas/LocationSearchResult"}
+        distanceM: {type: integer, format: int64}
+        durationS: {type: integer, format: int64}
+        fareVnd: {type: integer, format: int64}
+        routeGeometry: {$ref: "#/components/schemas/GeoJsonLineString"}
+        expiresAt: {type: string, format: date-time}
+
+    CreateTripRequest:
+      type: object
+      required: [quoteToken]
+      properties:
+        quoteToken: {type: string, format: uuid}
 
     TripCreated:
       type: object
@@ -864,9 +950,11 @@ components:
       properties:
         tripId: {type: string, format: uuid}
         state: {type: string}
-        pickup: {$ref: "#/components/schemas/GeoPoint"}
-        destination: {$ref: "#/components/schemas/GeoPoint"}
+        pickup: {$ref: "#/components/schemas/AddressedGeoPoint"}
+        destination: {$ref: "#/components/schemas/AddressedGeoPoint"}
         distanceM: {type: integer}
+        routeDurationS: {type: integer, format: int64}
+        routeGeometry: {$ref: "#/components/schemas/GeoJsonLineString"}
         fareVnd: {type: integer, format: int64}
         paymentStatus: {type: string, enum: [NOT_REQUESTED, PENDING, SUCCEEDED, FAILED]}
         driverId: {type: string, format: uuid, nullable: true}

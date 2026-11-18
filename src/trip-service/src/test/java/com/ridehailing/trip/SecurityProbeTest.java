@@ -352,13 +352,14 @@ class SecurityProbeTest {
 
     // ---------- T07-3 (F02) — NumericDate có phần giây lẻ ----------
 
-    /** F02: exp = now + 0.5 s vẫn hợp lệ; nbf tương lai hoặc "nbf": null -> 401. */
+    /** F02: exp = now + 0.5 s qua được auth filter; nbf tương lai hoặc "nbf": null -> 401. */
     @Test
     void fractionalSecondExpAcceptedAndNbfFutureOrNullRejected() throws Exception {
         Map<String, Object> claims = baseClaims("PASSENGER");
         claims.put("exp", Instant.now().toEpochMilli() / 1000.0 + 0.5); // now + 0.5 s
         Resp ok = post("/api/trips/quote", QUOTE_BODY, sign(claims), null);
-        assertThat(ok.status()).isEqualTo(200); // filter chấp nhận -> quote tính được (không chạm DB)
+        assertThat(ok.status()).isEqualTo(400); // filter chấp nhận; controller từ chối payload tọa độ cũ
+        assertThat(ok.body().get("code")).isEqualTo("INVALID_INPUT");
 
         claims = baseClaims("PASSENGER");
         claims.put("nbf", Instant.now().toEpochMilli() / 1000.0 + 0.9); // chưa hiệu lực

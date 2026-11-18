@@ -8,6 +8,20 @@ export interface Coord {
   longitude: number
 }
 
+export interface LocationSelection extends Coord {
+  locationToken: string
+  displayName: string
+}
+
+export interface TripPoint extends Coord {
+  address?: string
+}
+
+export interface RouteGeometry {
+  type: 'LineString'
+  coordinates: [number, number][]
+}
+
 /** Trip states theo contract §3.3 + state-machines.md §1 (CANCELLING là transient). */
 export type TripState =
   | 'SEARCHING'
@@ -25,9 +39,11 @@ export type PaymentStatus = 'NOT_REQUESTED' | 'PENDING' | 'SUCCEEDED' | 'FAILED'
 export interface Trip {
   tripId: string
   state: TripState
-  pickup: Coord
-  destination: Coord
+  pickup: TripPoint
+  destination: TripPoint
   distanceM: number
+  routeDurationS?: number
+  routeGeometry?: RouteGeometry
   fareVnd: number
   paymentStatus: PaymentStatus
   /** N27 — MVP chỉ hiển thị ID driver, không tên/số xe (trip-service không đọc Driver DB). */
@@ -47,8 +63,14 @@ export interface Page<T> {
 }
 
 export interface QuoteResult {
+  quoteToken: string
+  pickup: LocationSelection
+  destination: LocationSelection
   distanceM: number
+  durationS: number
   fareVnd: number
+  routeGeometry: RouteGeometry
+  expiresAt: string
 }
 
 export interface CreateTripResult {

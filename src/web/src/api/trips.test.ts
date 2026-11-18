@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 describe('tripsApi (contract §3.3/§3.4)', () => {
-  it('createTrip gửi header Idempotency-Key + body pickup/destination', async () => {
+  it('createTrip gửi header Idempotency-Key + quoteToken', async () => {
     saveSession('tok', USER, 3600)
     let seen: { url: string; headers: Record<string, string>; body?: unknown } | null = null
     vi.stubGlobal(
@@ -34,11 +34,11 @@ describe('tripsApi (contract §3.3/§3.4)', () => {
       }
     )
 
-    const res = await tripsApi.createTrip('key-uuid', { latitude: 1, longitude: 2 }, { latitude: 3, longitude: 4 })
+    const res = await tripsApi.createTrip('key-uuid', 'quote-uuid')
     expect(res.tripId).toBe('t1')
     expect(seen!.url).toBe('/api/trips')
     expect(seen!.headers['Idempotency-Key']).toBe('key-uuid')
-    expect(seen!.body).toEqual({ pickup: { latitude: 1, longitude: 2 }, destination: { latitude: 3, longitude: 4 } })
+    expect(seen!.body).toEqual({ quoteToken: 'quote-uuid' })
   })
 
   it('listTrips phân trang qua query page/size (contract §1.3)', async () => {
@@ -72,18 +72,28 @@ describe('tripsApi (contract §3.3/§3.4)', () => {
     expect(seen!.hasBody).toBe(false)
   })
 
-  it('quote POST /api/trips/quote trả distanceM/fareVnd', async () => {
+  it('searchLocations mã hóa query và quote gửi hai location token', async () => {
     saveSession('tok', USER, 3600)
     vi.stubGlobal(
       'fetch',
-      async (_url: unknown, init?: RequestInit) => {
+      async (url: unknown, init?: RequestInit) => {
+        if (String(url).startsWith('/api/locations/search')) {
+          expect(String(url)).toBe('/api/locations/search?q=H%E1%BB%93%20G%C6%B0%C6%A1m')
+          return fakeResponse(200, { results: [{ locationToken: 'p1', displayName: 'Hồ Gươm', latitude: 21, longitude: 105 }] })
+        }
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-        expect(body).toEqual({ pickup: { latitude: 1, longitude: 2 }, destination: { latitude: 3, longitude: 4 } })
-        return fakeResponse(200, { distanceM: 1920, fareVnd: 22000 })
+        expect(body).toEqual({ pickupLocationToken: 'p1', destinationLocationToken: 'd1' })
+        return fakeResponse(200, { quoteToken: 'q1', distanceM: 1920, durationS: 420, fareVnd: 22000,
+          pickup: { locationToken: 'p1', displayName: 'Hồ Gươm', latitude: 21, longitude: 105 },
+          destination: { locationToken: 'd1', displayName: 'Lăng Bác', latitude: 21.03, longitude: 105.83 },
+          routeGeometry: { type: 'LineString', coordinates: [[105, 21], [105.83, 21.03]] }, expiresAt: '2026-11-17T10:00:00Z' })
       }
     )
-    const res = await tripsApi.quote({ latitude: 1, longitude: 2 }, { latitude: 3, longitude: 4 })
-    expect(res).toEqual({ distanceM: 1920, fareVnd: 22000 })
+    const locations = await tripsApi.searchLocations('Hồ Gươm')
+    expect(locations[0].locationToken).toBe('p1')
+    const res = await tripsApi.quote('p1', 'd1')
+    expect(res.quoteToken).toBe('q1')
+    expect(res.durationS).toBe(420)
   })
 
   it('listNotifications GET /api/notifications phân trang', async () => {

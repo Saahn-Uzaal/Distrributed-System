@@ -70,8 +70,8 @@ export default function TripsListPanel({ refreshSignal = 0 }: Props): ReactEleme
       key: 'route',
       render: (_v, t) => (
         <Typography.Text>
-          {t.pickup.latitude.toFixed(4)}, {t.pickup.longitude.toFixed(4)} → {t.destination.latitude.toFixed(4)},{''}{' '}
-          {t.destination.longitude.toFixed(4)}
+          {t.pickup.address ?? `${t.pickup.latitude.toFixed(4)}, ${t.pickup.longitude.toFixed(4)}`} →{' '}
+          {t.destination.address ?? `${t.destination.latitude.toFixed(4)}, ${t.destination.longitude.toFixed(4)}`}
         </Typography.Text>
       )
     },

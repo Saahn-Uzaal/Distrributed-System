@@ -41,6 +41,7 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/**").permitAll()
                 // POST quote/create: chỉ passenger (contract §3.3)
                 .requestMatchers(HttpMethod.POST, "/api/trips", "/api/trips/quote").hasRole("PASSENGER")
+                .requestMatchers(HttpMethod.GET, "/api/locations/search").hasRole("PASSENGER")
                 // T20: cancel chỉ passenger (owner kiểm tra ở service; người khác → 404)
                 .requestMatchers(HttpMethod.POST, "/api/trips/*/cancel").hasRole("PASSENGER")
                 // POST accept/reject/start/complete: chỉ driver (contract §3.3)
@@ -48,7 +49,7 @@ public class SecurityConfig {
                         "/api/trips/*/accept", "/api/trips/*/reject",
                         "/api/trips/*/start", "/api/trips/*/complete").hasRole("DRIVER")
                 // GET list/detail + notifications: mọi role đã xác thực
-                .requestMatchers("/api/trips", "/api/trips/**", "/api/notifications", "/api/notifications/**")
+                .requestMatchers("/api/trips", "/api/trips/**", "/api/locations/**", "/api/notifications", "/api/notifications/**")
                     .authenticated()
                 .anyRequest().permitAll());
         http.exceptionHandling(ex -> ex

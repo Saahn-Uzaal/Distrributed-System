@@ -17,6 +17,8 @@ import { useUnauthorizedRedirect } from '../../hooks/useUnauthorizedRedirect'
 import { formatDateTime, formatVnd } from '../../trips/types'
 import StaleDataAlert from '../../ui/StaleDataAlert'
 import { isAmbiguousOutcome } from '../../ui/errorHint'
+import RouteMap from '../../maps/RouteMap'
+import type { Trip } from '../../trips/types'
 
 const OFFER_POLL_MS = 2_000 // spec §3
 
@@ -32,12 +34,20 @@ export default function OfferPanel({ onChanged }: Props): ReactElement {
   const [acting, setActing] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [tripDetail, setTripDetail] = useState<Trip | null>(null)
 
   /** Đếm ngược theo expiresAt (1 s/tick) — chỉ hiển thị; server quyết định khi accept. */
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    if (!offer) { setTripDetail(null); return }
+    const controller = new AbortController()
+    tripsApi.getTrip(offer.tripId, controller.signal).then(setTripDetail).catch(() => setTripDetail(null))
+    return () => controller.abort()
+  }, [offer?.tripId])
 
   async function act(run: () => Promise<void>): Promise<void> {
     if (acting) return
@@ -95,12 +105,13 @@ export default function OfferPanel({ onChanged }: Props): ReactElement {
       <StaleDataAlert error={error} />
       <Descriptions column={1} size="small">
         <Descriptions.Item label="Từ">
-          {offer.pickup.latitude.toFixed(4)}, {offer.pickup.longitude.toFixed(4)}
+          {tripDetail?.pickup.address ?? `${offer.pickup.latitude.toFixed(4)}, ${offer.pickup.longitude.toFixed(4)}`}
         </Descriptions.Item>
         <Descriptions.Item label="Đến">
-          {offer.destination.latitude.toFixed(4)}, {offer.destination.longitude.toFixed(4)}
+          {tripDetail?.destination.address ?? `${offer.destination.latitude.toFixed(4)}, ${offer.destination.longitude.toFixed(4)}`}
         </Descriptions.Item>
         <Descriptions.Item label="Khoảng cách">{offer.distanceM} m</Descriptions.Item>
+        {tripDetail?.routeDurationS !== undefined && <Descriptions.Item label="Thời gian dự kiến">{Math.max(1, Math.ceil(tripDetail.routeDurationS / 60))} phút</Descriptions.Item>}
         <Descriptions.Item label="Giá">{formatVnd(offer.fareVnd)}</Descriptions.Item>
         <Descriptions.Item label="Lượt đề nghị">{offer.attempt}</Descriptions.Item>
         <Descriptions.Item label="Hết hạn sau">
@@ -111,6 +122,10 @@ export default function OfferPanel({ onChanged }: Props): ReactElement {
           )}
         </Descriptions.Item>
       </Descriptions>
+      {tripDetail?.routeGeometry && <div style={{ marginTop: 12 }}>
+        <RouteMap pickup={tripDetail.pickup} destination={tripDetail.destination}
+          geometry={tripDetail.routeGeometry} height={300} />
+      </div>}
       <Space style={{ marginTop: 12 }}>
         <Button type="primary" loading={acting} disabled={remaining <= 0} onClick={handleAccept}>
           Nhận chuyến

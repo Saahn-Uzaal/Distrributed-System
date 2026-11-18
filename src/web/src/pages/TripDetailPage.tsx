@@ -12,6 +12,7 @@ import { canCancelTrip, formatDateTime, formatVnd, isTripSettled, paymentStatusL
 import { usePolling } from '../hooks/usePolling'
 import { useUnauthorizedRedirect } from '../hooks/useUnauthorizedRedirect'
 import StaleDataAlert from '../ui/StaleDataAlert'
+import RouteMap from '../maps/RouteMap'
 
 const DETAIL_POLL_MS = 2000 // spec §3
 
@@ -86,12 +87,13 @@ export default function TripDetailPage(): ReactElement {
 
       <Descriptions column={1} size="small">
         <Descriptions.Item label="Từ">
-          {trip.pickup.latitude.toFixed(4)}, {trip.pickup.longitude.toFixed(4)}
+          {trip.pickup.address ?? `${trip.pickup.latitude.toFixed(4)}, ${trip.pickup.longitude.toFixed(4)}`}
         </Descriptions.Item>
         <Descriptions.Item label="Đến">
-          {trip.destination.latitude.toFixed(4)}, {trip.destination.longitude.toFixed(4)}
+          {trip.destination.address ?? `${trip.destination.latitude.toFixed(4)}, ${trip.destination.longitude.toFixed(4)}`}
         </Descriptions.Item>
         <Descriptions.Item label="Khoảng cách">{trip.distanceM} m</Descriptions.Item>
+        {trip.routeDurationS !== undefined && <Descriptions.Item label="Thời gian dự kiến">{Math.max(1, Math.ceil(trip.routeDurationS / 60))} phút</Descriptions.Item>}
         <Descriptions.Item label="Giá dự kiến">{formatVnd(trip.fareVnd)}</Descriptions.Item>
         <Descriptions.Item label="Thanh toán">
           {paymentStatusLabel(trip.paymentStatus)}
@@ -113,6 +115,10 @@ export default function TripDetailPage(): ReactElement {
         <Descriptions.Item label="Tạo lúc">{formatDateTime(trip.createdAt)}</Descriptions.Item>
         {trip.updatedAt && <Descriptions.Item label="Cập nhật lúc">{formatDateTime(trip.updatedAt)}</Descriptions.Item>}
       </Descriptions>
+
+      {trip.routeGeometry && <div style={{ marginTop: 16 }}>
+        <RouteMap pickup={trip.pickup} destination={trip.destination} geometry={trip.routeGeometry} />
+      </div>}
 
       <Space style={{ marginTop: 16 }}>
         <Link to="/passenger">

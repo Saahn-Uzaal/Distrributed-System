@@ -37,6 +37,7 @@ import java.nio.file.Path;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.sql.Timestamp;
 import java.util.HexFormat;
 import java.time.Instant;
 import java.util.Arrays;
@@ -132,7 +133,9 @@ class TripIntegrationTest {
         jdbc.update("DELETE FROM notifications");
         jdbc.update("DELETE FROM outbox");
         jdbc.update("DELETE FROM idempotency_keys");
+        jdbc.update("DELETE FROM trip_quotes");
         jdbc.update("DELETE FROM trips");
+        jdbc.update("DELETE FROM location_search_results");
     }
 
     // --- helpers HTTP/JWT/DB ---
@@ -193,16 +196,55 @@ class TripIntegrationTest {
     // --- tests ---
 
     @org.junit.jupiter.api.Test
-    void quoteReturnsServerComputedFare() throws Exception {
+    void quoteRejectsRawCoordinatesBecauseRouteTokensAreRequired() throws Exception {
         Resp resp = send("POST", "/api/trips/quote", token(UUID.randomUUID(), "PASSENGER"), Map.of(), QUOTE_BODY);
-        assertThat(resp.status()).isEqualTo(200);
-        // Haversine (R=6371008.8) cho cặp tọa độ này = 3309 m; fare = 12000 + ceil(3309/1000)*5000 = 32000.
-        assertThat(((Number) resp.body().get("distanceM")).longValue()).isEqualTo(3309);
-        assertThat(((Number) resp.body().get("fareVnd")).longValue()).isEqualTo(32000);
+        assertThat(resp.status()).isEqualTo(400);
+        assertThat(resp.body().get("code")).isEqualTo("INVALID_INPUT");
 
         // Quote không tạo trip, không side effect.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM trips", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM outbox", Integer.class)).isZero();
+    }
+
+    @org.junit.jupiter.api.Test
+    void createFromRouteQuotePersistsAddressRouteAndConsumesQuote() throws Exception {
+        UUID passenger = UUID.randomUUID();
+        UUID pickupToken = UUID.randomUUID();
+        UUID destinationToken = UUID.randomUUID();
+        UUID quoteToken = UUID.randomUUID();
+        Instant now = Instant.now();
+        Instant expiresAt = now.plusSeconds(900);
+        jdbc.update("INSERT INTO location_search_results(token,passenger_id,provider_place_id,display_name,latitude,longitude,expires_at) VALUES (?,?,?,?,?,?,?)",
+                pickupToken, passenger, "pickup-1", "Chợ Bến Thành, Quận 1, TP. Hồ Chí Minh", 10.7725, 106.6980, Timestamp.from(expiresAt));
+        jdbc.update("INSERT INTO location_search_results(token,passenger_id,provider_place_id,display_name,latitude,longitude,expires_at) VALUES (?,?,?,?,?,?,?)",
+                destinationToken, passenger, "destination-1", "Dinh Độc Lập, Quận 1, TP. Hồ Chí Minh", 10.7770, 106.6953, Timestamp.from(expiresAt));
+        String geometry = "{\"type\":\"LineString\",\"coordinates\":[[106.698,10.7725],[106.6953,10.777]]}";
+        jdbc.update("INSERT INTO trip_quotes(id,passenger_id,pickup_token,destination_token,distance_m,duration_s,fare_vnd,route_geometry,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?::jsonb,?,?)",
+                quoteToken, passenger, pickupToken, destinationToken, 850L, 240L, 20000L, geometry,
+                Timestamp.from(now), Timestamp.from(expiresAt));
+        UUID idempotencyKey = UUID.randomUUID();
+
+        Resp created = send("POST", "/api/trips", token(passenger, "PASSENGER"),
+                Map.of("Idempotency-Key", idempotencyKey.toString()),
+                "{\"quoteToken\":\"" + quoteToken + "\"}");
+
+        assertThat(created.status()).isEqualTo(202);
+        UUID tripId = UUID.fromString((String) created.body().get("tripId"));
+        Map<String, Object> trip = jdbc.queryForMap("SELECT pickup_address,destination_address,distance_m,route_duration_s,fare_vnd,route_geometry::text AS route_geometry FROM trips WHERE id=?", tripId);
+        assertThat(trip.get("pickup_address")).isEqualTo("Chợ Bến Thành, Quận 1, TP. Hồ Chí Minh");
+        assertThat(trip.get("destination_address")).isEqualTo("Dinh Độc Lập, Quận 1, TP. Hồ Chí Minh");
+        assertThat(((Number) trip.get("distance_m")).longValue()).isEqualTo(850L);
+        assertThat(((Number) trip.get("route_duration_s")).longValue()).isEqualTo(240L);
+        assertThat(((Number) trip.get("fare_vnd")).longValue()).isEqualTo(20000L);
+        assertThat((String) trip.get("route_geometry")).contains("LineString");
+        assertThat(jdbc.queryForObject("SELECT trip_id FROM trip_quotes WHERE id=?", UUID.class, quoteToken)).isEqualTo(tripId);
+        assertThat(jdbc.queryForObject("SELECT used_at IS NOT NULL FROM trip_quotes WHERE id=?", Boolean.class, quoteToken)).isTrue();
+
+        Resp replay = send("POST", "/api/trips", token(passenger, "PASSENGER"),
+                Map.of("Idempotency-Key", idempotencyKey.toString()),
+                "{\"quoteToken\":\"" + quoteToken + "\"}");
+        assertThat(replay.status()).isEqualTo(202);
+        assertThat(replay.body().get("tripId")).isEqualTo(tripId.toString());
     }
 
     @org.junit.jupiter.api.Test
@@ -734,7 +776,7 @@ class TripIntegrationTest {
                     key, hash, originalResponse);
             var upgraded = Flyway.configure().dataSource(dataSource).schemas(schema).defaultSchema(schema).load();
             upgraded.migrate();
-            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("8"); // T25: V8 notifications
+            assertThat(upgraded.info().current().getVersion().getVersion()).isEqualTo("9");
             assertThat(legacy.queryForObject("SELECT principal_id FROM idempotency_keys WHERE key = ?", UUID.class, key))
                     .isEqualTo(passenger);
             assertThat(legacy.queryForObject("SELECT operation FROM idempotency_keys WHERE key = ?", String.class, key))

@@ -15,7 +15,9 @@ public class TripRepository {
 
     /** Row trips theo contract §3.3 (detail) + cột nội bộ cho transition sau. */
     public record TripRow(UUID id, UUID passengerId, Double pickupLat, Double pickupLng,
-                          Double destinationLat, Double destinationLng, long distanceM, long fareVnd,
+                          Double destinationLat, Double destinationLng, String pickupAddress,
+                          String destinationAddress, long distanceM, long routeDurationS,
+                          String routeGeometry, long fareVnd,
                           String state, int matchingAttempt, UUID driverId, UUID driverUserId, String paymentStatus,
                           int paymentAttempt, int version, Instant createdAt, Instant updatedAt) {
     }
@@ -32,18 +34,27 @@ public class TripRepository {
     public UUID insert(UUID id, UUID passengerId, double pickupLat, double pickupLng,
                        double destinationLat, double destinationLng, long distanceM, long fareVnd,
                        Instant createdAt) {
-        jdbc.update("INSERT INTO trips (id, passenger_id, pickup_lat, pickup_lng, "
-                        + "destination_lat, destination_lng, distance_m, fare_vnd, state, matching_attempt, version, created_at)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SEARCHING', 1, 1, ?)",
-                id, passengerId, pickupLat, pickupLng, destinationLat, destinationLng, distanceM, fareVnd,
-                Timestamp.from(createdAt));
+        return insert(id, passengerId, pickupLat, pickupLng, destinationLat, destinationLng,
+                pickupLat + ", " + pickupLng, destinationLat + ", " + destinationLng,
+                distanceM, 0, "{\"type\":\"LineString\",\"coordinates\":[]}", fareVnd, createdAt);
+    }
+
+    public UUID insert(UUID id, UUID passengerId, double pickupLat, double pickupLng,
+                       double destinationLat, double destinationLng, String pickupAddress,
+                       String destinationAddress, long distanceM, long routeDurationS,
+                       String routeGeometry, long fareVnd, Instant createdAt) {
+        jdbc.update("INSERT INTO trips (id,passenger_id,pickup_lat,pickup_lng,destination_lat,destination_lng,"
+                        + "pickup_address,destination_address,distance_m,route_duration_s,route_geometry,fare_vnd,state,matching_attempt,version,created_at)"
+                        + " VALUES (?,?,?,?,?,?,?,?,?,?,?::jsonb,?,'SEARCHING',1,1,?)",
+                id, passengerId, pickupLat, pickupLng, destinationLat, destinationLng, pickupAddress,
+                destinationAddress, distanceM, routeDurationS, routeGeometry, fareVnd, Timestamp.from(createdAt));
         return id;
     }
 
     public Optional<TripRow> findById(UUID id) {
         List<TripRow> rows = jdbc.query(
                 "SELECT id, passenger_id, pickup_lat, pickup_lng, destination_lat, destination_lng,"
-                        + " distance_m, fare_vnd, state, matching_attempt, driver_id, driver_user_id, payment_status,"
+                        + " pickup_address,destination_address,distance_m,route_duration_s,route_geometry::text,fare_vnd, state, matching_attempt, driver_id, driver_user_id, payment_status,"
                         + " payment_attempt, version, created_at, updated_at FROM trips WHERE id = ?",
                 this::mapRow, id);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
@@ -52,7 +63,7 @@ public class TripRepository {
     /** Passenger thấy chuyến của mình; driver thấy chuyến đã assign cho mình (contract §3.3). */
     public List<TripRow> listForUser(UUID passengerId, UUID driverUserId, long offset, int limit) {
         return jdbc.query("SELECT id, passenger_id, pickup_lat, pickup_lng, destination_lat,"
-                        + " destination_lng, distance_m, fare_vnd, state, matching_attempt, driver_id, driver_user_id,"
+                        + " destination_lng,pickup_address,destination_address,distance_m,route_duration_s,route_geometry::text,fare_vnd, state, matching_attempt, driver_id, driver_user_id,"
                         + " payment_status, payment_attempt, version, created_at, updated_at"
                         + " FROM trips WHERE passenger_id = ? OR driver_user_id = ?"
                         + " ORDER BY created_at DESC, id LIMIT ? OFFSET ?",
@@ -182,7 +193,11 @@ public class TripRepository {
                 rs.getDouble("pickup_lng"),
                 rs.getDouble("destination_lat"),
                 rs.getDouble("destination_lng"),
+                rs.getString("pickup_address"),
+                rs.getString("destination_address"),
                 rs.getLong("distance_m"),
+                rs.getLong("route_duration_s"),
+                rs.getString("route_geometry"),
                 rs.getLong("fare_vnd"),
                 rs.getString("state"),
                 rs.getInt("matching_attempt"),

@@ -43,6 +43,14 @@ fare:
 # T13 — outbox publish worker (events.md §4.6): quét PENDING, publish + chờ confirm rồi đánh dấu SENT;
 # returned/lỗi transient -> giữ PENDING + last_error + backoff next_attempt_at.
 app:
+  map:
+    nominatim-base-url: ${MAP_NOMINATIM_BASE_URL:https://nominatim.openstreetmap.org}
+    osrm-base-url: ${MAP_OSRM_BASE_URL:https://router.project-osrm.org}
+    user-agent: ${MAP_USER_AGENT:DS03-RideHailing/0.1 (local-demo)}
+    http-timeout-ms: ${MAP_HTTP_TIMEOUT_MS:4000}
+    osrm-timeout-ms: ${MAP_OSRM_TIMEOUT_MS:5000}
+    location-token-ttl-seconds: ${MAP_LOCATION_TOKEN_TTL_SECONDS:900}
+    quote-ttl-seconds: ${MAP_QUOTE_TTL_SECONDS:600}
   outbox:
     enabled: true
     publish-interval-ms: 1000

@@ -13,6 +13,7 @@ import { canCompleteTrip, canStartTrip, formatDateTime, formatVnd, isTerminalTri
 import { usePolling } from '../../hooks/usePolling'
 import { useUnauthorizedRedirect } from '../../hooks/useUnauthorizedRedirect'
 import StaleDataAlert from '../../ui/StaleDataAlert'
+import RouteMap from '../../maps/RouteMap'
 
 const TRIP_POLL_MS = 2000 // spec §3
 
@@ -76,15 +77,19 @@ export default function BusyTripPanel({ tripId }: Props): ReactElement {
       </Space>
       <Descriptions column={1} size="small">
         <Descriptions.Item label="Từ">
-          {trip.pickup.latitude.toFixed(4)}, {trip.pickup.longitude.toFixed(4)}
+          {trip.pickup.address ?? `${trip.pickup.latitude.toFixed(4)}, ${trip.pickup.longitude.toFixed(4)}`}
         </Descriptions.Item>
         <Descriptions.Item label="Đến">
-          {trip.destination.latitude.toFixed(4)}, {trip.destination.longitude.toFixed(4)}
+          {trip.destination.address ?? `${trip.destination.latitude.toFixed(4)}, ${trip.destination.longitude.toFixed(4)}`}
         </Descriptions.Item>
         <Descriptions.Item label="Khoảng cách">{trip.distanceM} m</Descriptions.Item>
+        {trip.routeDurationS !== undefined && <Descriptions.Item label="Thời gian dự kiến">{Math.max(1, Math.ceil(trip.routeDurationS / 60))} phút</Descriptions.Item>}
         <Descriptions.Item label="Giá">{formatVnd(trip.fareVnd)}</Descriptions.Item>
         <Descriptions.Item label="Tạo lúc">{formatDateTime(trip.createdAt)}</Descriptions.Item>
       </Descriptions>
+      {trip.routeGeometry && <div style={{ marginTop: 12 }}>
+        <RouteMap pickup={trip.pickup} destination={trip.destination} geometry={trip.routeGeometry} height={300} />
+      </div>}
       <Space style={{ marginTop: 12 }}>
         {canStartTrip(trip.state) && (
           <Button type="primary" loading={acting} onClick={() => handleAction('start')}>

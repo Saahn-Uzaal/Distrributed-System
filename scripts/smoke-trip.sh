@@ -23,11 +23,11 @@ fi
 PASS_EMAIL="passenger-1@demo.local"
 DRIVER_EMAILS=("driver-1@demo.local" "driver-2@demo.local" "driver-3@demo.local")
 
-# Cùng tọa độ demo với seed-demo.sh (drivers nằm trong radius matching 5000 m của pickup).
-PICKUP_LAT=21.0345
-PICKUP_LNG=105.8409
-DEST_LAT=21.0260
-DEST_LNG=105.8570
+# Địa chỉ thật tại Hà Nội; backend giới hạn kết quả Nominatim trong Việt Nam.
+# ASCII keeps this cross-platform smoke stable under Git Bash/MSYS argument conversion on Windows;
+# the browser still sends normal UTF-8 Vietnamese text via encodeURIComponent.
+PICKUP_QUERY="Ba Dinh Square, Hanoi"
+DEST_QUERY="Hanoi Opera House"
 
 fail() { echo "SMOKE FAIL: $*" >&2; exit 1; }
 
@@ -46,6 +46,17 @@ http() { # METHOD PATH [BEARER] [JSON_BODY] [EXTRA_HEADER] -> "STATUS<TAB>BODY"
 
 json_field() { sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p' <<<"$1" | head -1; }
 json_number() { sed -n 's/.*"'"$2"'":\([0-9][0-9]*\).*/\1/p' <<<"$1" | head -1; }
+
+search_location() { # QUERY BEARER -> response body
+  local query="$1" bearer="$2" tmp status
+  tmp="$(mktemp)"
+  status="$(curl -s --max-time 12 -G "$BASE_URL/api/locations/search" \
+    --data-urlencode "q=$query" -H "Authorization: Bearer $bearer" \
+    -o "$tmp" -w '%{http_code}')" || fail "HTTP lỗi khi tìm địa chỉ: $query"
+  [ "$status" = "200" ] || fail "tìm địa chỉ '$query' -> HTTP $status: $(cat "$tmp")"
+  cat "$tmp"
+  rm -f "$tmp"
+}
 
 gen_uuid() {
   local h
@@ -88,18 +99,28 @@ refresh_heartbeats() {
 
 refresh_heartbeats
 
-# ---------- 3) quote ----------
-quote_body="{\"pickup\":{\"latitude\":$PICKUP_LAT,\"longitude\":$PICKUP_LNG},\"destination\":{\"latitude\":$DEST_LAT,\"longitude\":$DEST_LNG}}"
+# ---------- 3) tìm địa chỉ + quote tuyến đường ----------
+pickup_search="$(search_location "$PICKUP_QUERY" "$pass_tok")"
+pickup_token="$(json_field "$pickup_search" locationToken)"
+[ -n "$pickup_token" ] || fail "không tìm thấy điểm đón '$PICKUP_QUERY': $pickup_search"
+destination_search="$(search_location "$DEST_QUERY" "$pass_tok")"
+destination_token="$(json_field "$destination_search" locationToken)"
+[ -n "$destination_token" ] || fail "không tìm thấy điểm đến '$DEST_QUERY': $destination_search"
+
+quote_body="{\"pickupLocationToken\":\"$pickup_token\",\"destinationLocationToken\":\"$destination_token\"}"
 line="$(http POST /api/trips/quote "$pass_tok" "$quote_body")"
 status="${line%%$'\t'*}"; body="${line#*$'\t'}"
 [ "$status" = "200" ] || fail "quote -> HTTP $status: $body"
 distanceM="$(json_number "$body" distanceM)"
 fareVnd="$(json_number "$body" fareVnd)"
+quote_token="$(json_field "$body" quoteToken)"
+[ -n "$quote_token" ] || fail "quote không có quoteToken: $body"
 echo "quote: distanceM=$distanceM fareVnd=$fareVnd"
 
 # ---------- 4) create trip (Idempotency-Key mới mỗi lần chạy) ----------
 idem_key="$(gen_uuid)"
-line="$(http POST /api/trips "$pass_tok" "$quote_body" "Idempotency-Key: $idem_key")"
+create_body="{\"quoteToken\":\"$quote_token\"}"
+line="$(http POST /api/trips "$pass_tok" "$create_body" "Idempotency-Key: $idem_key")"
 status="${line%%$'\t'*}"; body="${line#*$'\t'}"
 if [ "$status" = "409" ] && grep -q '"ACTIVE_TRIP_EXISTS"' <<<"$body"; then
   fail "passenger có trip chưa terminal — chạy scripts/reset-demo.sh --confirm rồi thử lại"

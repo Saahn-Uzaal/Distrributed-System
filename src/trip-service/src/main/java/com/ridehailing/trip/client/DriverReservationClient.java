@@ -1,6 +1,7 @@
 package com.ridehailing.trip.client;
 
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -35,7 +36,7 @@ public class DriverReservationClient {
     private final RestClient rest;
     private final tools.jackson.databind.ObjectMapper json = new tools.jackson.databind.ObjectMapper();
 
-    public DriverReservationClient(RestClient rest) {
+    public DriverReservationClient(@Qualifier("driverServiceRestClient") RestClient rest) {
         this.rest = rest;
     }
 

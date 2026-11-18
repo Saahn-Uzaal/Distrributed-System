@@ -14,7 +14,8 @@ Prototype hệ thống đặt xe mô phỏng Grab/Uber cho môn Distributed Syst
 | Persistence | PostgreSQL + Flyway; **JdbcTemplate** ở driver/trip/matching/payment, chỉ identity-service dùng JPA — xem mục "Lệch đặc tả có chủ đích" |
 | Security | Spring Security (filter chain theo role), BCrypt, JWT RS256 (nimbus-jose-jwt), `X-Internal-Token` cho API nội bộ |
 | Messaging | RabbitMQ + Spring AMQP. Trip, Matching, Payment: outbox (persistent, `mandatory`, publisher confirms) + inbox (dedup, retry 3 lần, DLQ) |
-| Frontend | React + TypeScript + Vite + Ant Design (từ task T08) |
+| Frontend | React + TypeScript + Vite + Ant Design + Leaflet |
+| Bản đồ | OpenStreetMap tiles; Nominatim tìm địa chỉ (chỉ Việt Nam); OSRM tính tuyến đường |
 | Deploy | Docker Compose + Nginx (từ task T29) |
 
 ### Lệch đặc tả có chủ đích
@@ -31,6 +32,12 @@ Prototype hệ thống đặt xe mô phỏng Grab/Uber cho môn Distributed Syst
 | `trip-service` | 8083 | Trips, fare, Saga orchestration, notifications |
 | `matching-service` | 8084 | Matching jobs, ranking, proposal history |
 | `payment-service` | 8085 | Simulated payments, deduplication |
+
+## Đặt chuyến bằng địa chỉ và bản đồ
+
+Passenger nhập địa chỉ đón/đến rồi bấm **Tìm** hoặc Enter; hệ thống không gọi tìm kiếm theo từng phím. `trip-service` giới hạn Nominatim trong Việt Nam, trả tối đa 5 lựa chọn và phát token địa chỉ có thời hạn. Sau khi chọn hai địa chỉ, backend gọi OSRM, lưu tuyến GeoJSON, tính khoảng cách/thời gian/giá và trả `quoteToken`. Chuyến chỉ được tạo từ báo giá còn hiệu lực; nếu Nominatim hoặc OSRM lỗi thì hệ thống chặn tính giá/đặt chuyến và yêu cầu thử lại, không dùng khoảng cách ước lượng thay thế.
+
+Passenger và driver đều xem được tên hai địa chỉ cùng tuyến đường trước và trong chuyến. Các endpoint chính là `GET /api/locations/search`, `POST /api/trips/quote`, rồi `POST /api/trips`; chi tiết schema nằm trong `docs/openapi.yaml`. Dịch vụ public miễn phí phù hợp local/demo và có thể bị giới hạn lưu lượng, vì vậy tìm địa chỉ có rate limit + cache và không phù hợp tải production lớn.
 
 ## Local infrastructure — PostgreSQL (T03)
 
@@ -192,7 +199,7 @@ Mỗi service chạy trên port riêng (bảng ở trên). Health endpoint: `/ac
 cd src/web && npm install && npm run dev   # http://localhost:5173 — proxy /api/* tới service local :8081/:8082/:8083
 ```
 Nginx không còn dùng được ở chế độ này: frontend + `deploy/nginx.conf` được bake vào image `ridehailing-web` và proxy sang DNS service compose (mục "Chạy toàn hệ thống").
-- Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|notifications` tới **upstream DNS tên service compose** (`identity-service:8081`, `driver-service:8082`, `trip-service:8083`) — T29; `server ... resolve` nên gateway không crash khi backend chưa chạy và theo IP mới khi container được recreate. Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON với correlationId do Nginx tự sinh/giữ (`error_page 413` + biến `$cid` — không cần trang lỗi tĩnh). Lỗi upstream 502/503/504 và rate limit cũng trả JSON `UPSTREAM_UNAVAILABLE` / `RATE_LIMITED` theo contract §1.2; Nginx giữ/sinh correlation ID (`$request_id_uuid`) cho mọi request và ghi vào access log.
+- Nginx (:8080) serve build + SPA fallback và proxy `/api/auth|drivers|trips|locations|notifications` tới **upstream DNS tên service compose** (`identity-service:8081`, `driver-service:8082`, `trip-service:8083`) — T29; `server ... resolve` nên gateway không crash khi backend chưa chạy và theo IP mới khi container được recreate. Body limit **64 KiB** theo contract; vượt giới hạn trả 413 JSON với correlationId do Nginx tự sinh/giữ (`error_page 413` + biến `$cid` — không cần trang lỗi tĩnh). Lỗi upstream 502/503/504 và rate limit cũng trả JSON `UPSTREAM_UNAVAILABLE` / `RATE_LIMITED` theo contract §1.2; Nginx giữ/sinh correlation ID (`$request_id_uuid`) cho mọi request và ghi vào access log.
 - **N02 — binding loopback:** mỗi service bind chỉ loopback bằng mặc định khi chạy local (`server.address: ${SERVER_ADDRESS:127.0.0.1}`); trong container (T29) compose đặt `SERVER_ADDRESS=0.0.0.0` và publish port **CHỈ 127.0.0.1** — không mở ra LAN, không expose qua :8080.
 - Services log structured JSON (spec §11); env tùy chọn `INSTANCE_ID` đặt instanceId trong log (mặc định = UUID per JVM).
 - Dev server: `npm run dev` ở `src/web/` (:5173, có proxy `/api/*` tới :8081/:8082/:8083) — không cần nginx khi phát triển UI.
@@ -203,11 +210,11 @@ Sau khi hạ tầng + 5 services chạy, seed 3 passengers/3 drivers và smoke m
 
 ```bash
 bash scripts/seed-demo.sh            # idempotent: chạy lại không tạo trùng (409 EMAIL_TAKEN -> skip)
-bash scripts/smoke-trip.sh           # quote -> create -> offer -> accept -> start -> complete -> payment result + verify notifications/events
+bash scripts/smoke-trip.sh           # tìm địa chỉ -> route/quote -> create -> offer -> accept -> start -> complete -> payment
 bash scripts/reset-demo.sh --confirm  # hủy trip chưa terminal của demo users, đưa drivers về AVAILABLE (bắt buộc --confirm)
 ```
 
-`SEED_PASSWORD` đọc từ `.env` (dev-only). Tọa độ demo quanh Hồ Gươm; 3 driver nằm trong radius matching 5000 m của pickup. Smoke dùng Idempotency-Key mới mỗi lần chạy; trip COMPLETED không chặn create kế tiếp.
+`SEED_PASSWORD` đọc từ `.env` (dev-only). Smoke tìm hai địa chỉ Hà Nội thật qua Nominatim; 3 driver demo nằm trong radius matching 5000 m của khu vực pickup. Smoke dùng Idempotency-Key mới mỗi lần chạy; trip COMPLETED không chặn create kế tiếp.
 
 ## Cấu trúc repository
 

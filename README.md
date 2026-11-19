@@ -269,16 +269,100 @@ Theo đề §10.1 và đặc tả mục 16 (C02):
 
 ## Kịch bản demo
 
-Kịch bản demo gồm 8 bước:
+### 1. Chuẩn bị dữ liệu demo
 
-1. Năm service độc lập, queue trên RabbitMQ.
-2. Tài xế bật trạng thái sẵn sàng.
-3. Hai hành khách đặt xe đồng thời khi chỉ có một tài xế (`bash scripts/demo-concurrency.sh`).
-4. Chuyến hoàn chỉnh trên giao diện: đặt, nhận, bắt đầu, hoàn thành, thanh toán, thông báo.
-5. Dừng Matching, queue giữ message, bật lại và chuyến tiếp tục (`bash scripts/demo-recovery.sh matching`).
-6. Payment chết sau commit, trước ACK; redelivery không tạo payment trùng (`bash scripts/demo-recovery.sh payment`).
-7. Tài xế từ chối, Saga giải phóng reservation.
-8. Theo dấu một luồng qua các service bằng correlationId (`bash scripts/correlation-filter.sh <id>`).
+Khởi động stack theo mục **Chạy toàn hệ thống bằng Docker Compose**, sau đó kiểm tra các container đều healthy và tạo dữ liệu demo:
+
+```bash
+docker compose --env-file .env -f deploy/compose.yaml ps
+bash scripts/seed-demo.sh
+bash scripts/reset-demo.sh --confirm
+```
+
+`seed-demo.sh` tạo ba passenger và ba driver qua public API; chạy lại không tạo bản ghi trùng. `reset-demo.sh --confirm` hủy các chuyến demo chưa kết thúc và đưa tài xế về `AVAILABLE`, không xóa volume hoặc lịch sử chuyến đã hoàn thành.
+
+| Vai trò | Tài khoản demo |
+|---|---|
+| Passenger | `passenger-1@demo.local`, `passenger-2@demo.local`, `passenger-3@demo.local` |
+| Driver | `driver-1@demo.local`, `driver-2@demo.local`, `driver-3@demo.local` |
+
+Tất cả tài khoản dùng mật khẩu trong biến `SEED_PASSWORD` của `.env`; giá trị dev mẫu trong `.env.example` là `SeedPass123!`. Chỉ dùng các credential này cho local/demo.
+
+### 2. Demo chính trên giao diện
+
+Mở `http://localhost:8080` bằng hai cửa sổ hoặc hai browser profile riêng để giữ đồng thời phiên passenger và driver.
+
+1. Đăng nhập passenger bằng `passenger-1@demo.local`.
+2. Tại **Đặt chuyến mới**, nhập `Quảng trường Ba Đình, Hà Nội` làm nơi đón, bấm **Tìm** hoặc Enter rồi chọn một kết quả.
+3. Nhập `Nhà hát Lớn Hà Nội` làm điểm đến, tìm và chọn kết quả tương ứng.
+4. Kiểm tra bản đồ đã có hai marker và tuyến đường; giao diện phải hiện quãng đường, thời gian dự kiến và giá do backend tính.
+5. Bấm **Đặt chuyến**. Chuyến chuyển từ `SEARCHING` sang `DRIVER_OFFERED` sau khi matching tìm được tài xế.
+6. Ở cửa sổ driver, đăng nhập một tài khoản driver và bảo đảm trạng thái là `AVAILABLE`. Matching chọn tài xế phù hợp trong ba tài khoản; nếu driver đang mở không có offer, kiểm tra `driver-2` và `driver-3`, hoặc đặt hai tài xế đó `OFFLINE` trước khi tạo chuyến để cố định người nhận.
+7. Tài xế kiểm tra tên địa chỉ, tuyến trên bản đồ, quãng đường, thời gian và giá, sau đó bấm **Nhận chuyến**.
+8. Tài xế lần lượt bấm **Bắt đầu chuyến** và **Hoàn thành chuyến**. Passenger theo dõi các trạng thái `ACCEPTED` → `IN_PROGRESS` → `COMPLETED` trong trang chi tiết.
+9. Chờ `paymentStatus` chuyển từ `PENDING` sang `SUCCEEDED` (mặc định). Kiểm tra tab **Thông báo** của passenger và driver có các sự kiện offer, accept, complete và payment.
+
+Tuyến hiển thị cho driver là snapshot đã lưu khi passenger đặt chuyến; polling không gọi lại Nominatim hoặc OSRM. Nếu tìm địa chỉ hoặc định tuyến lỗi, hệ thống khóa báo giá/đặt chuyến và yêu cầu thử lại, không dùng khoảng cách ước lượng.
+
+### 3. Demo tự động luồng hoàn chỉnh
+
+Có thể chứng minh cùng luồng qua public API bằng một lệnh:
+
+```bash
+bash scripts/smoke-trip.sh
+```
+
+Script tìm thật hai địa chỉ tại Hà Nội, lấy route/quote, tạo chuyến, xác định driver được offer, accept, start, complete, chờ payment và kiểm tra notification/event history. Kết quả đạt khi dòng cuối báo `SMOKE PASS` và payment là `SUCCEEDED`.
+
+### 4. Demo tài xế từ chối và Saga tìm lại
+
+1. Reset dữ liệu demo rồi tạo một chuyến mới như mục 2.
+2. Driver đang nhận offer bấm **Từ chối**.
+3. Kiểm tra driver đó trở lại `AVAILABLE`, reservation được release và chuyến quay lại `SEARCHING` để tìm tài xế khác.
+4. Driver đã từ chối không được đề xuất lại trong cùng chuyến; nếu không còn ứng viên, chuyến kết thúc ở `NO_DRIVER`.
+
+### 5. Demo concurrency
+
+Chạy một lượt C01: hai passenger đặt xe gần như đồng thời khi chỉ có một driver khả dụng.
+
+```bash
+bash scripts/demo-concurrency.sh
+```
+
+Kết quả mong đợi: chỉ một chuyến giữ được driver, chuyến còn lại về `NO_DRIVER`; `max_db_reserved=1`, không có reservation chồng nhau và không còn pointer mồ côi sau cleanup.
+
+### 6. Demo failure/recovery
+
+```bash
+# Dừng Matching, tạo trip, quan sát queue giữ message rồi khởi động lại (~20 giây)
+bash scripts/demo-recovery.sh matching
+
+# Kill Payment sau commit nhưng trước ACK; redelivery không tạo payment trùng (~40 giây)
+bash scripts/demo-recovery.sh payment
+```
+
+Kịch bản Matching đạt khi trip tiếp tục đến `DRIVER_OFFERED` sau khi service chạy lại. Kịch bản Payment đạt khi chỉ có một payment row và inbox ghi nhận duplicate delivery thay vì thu tiền lần hai.
+
+### 7. Theo dấu một request qua các service
+
+Trong DevTools → **Network**, chọn một request API và lấy response header `X-Correlation-ID`, sau đó chạy:
+
+```bash
+bash scripts/correlation-filter.sh <correlation-id>
+```
+
+Script tìm cùng correlation ID trong log của Nginx và năm service, giúp trình bày đường đi của request/event qua hệ thống phân tán. Có thể mở thêm `http://localhost:8080/demo` sau khi đăng nhập để xem tổng quan chuyến và các health link dành cho local.
+
+### 8. Khôi phục nhanh khi demo bị gián đoạn
+
+Nếu gặp `ACTIVE_TRIP_EXISTS`, driver bị `RESERVED/BUSY`, hoặc đã đóng trình duyệt giữa chuyến, chạy:
+
+```bash
+bash scripts/reset-demo.sh --confirm
+bash scripts/seed-demo.sh
+```
+
+Nếu container chưa healthy, kiểm tra bằng `docker compose --env-file .env -f deploy/compose.yaml ps` và xem log service liên quan trước khi chạy lại kịch bản.
 
 ## Đặc tả API
 
